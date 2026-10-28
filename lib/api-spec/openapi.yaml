@@ -11,6 +11,19 @@ tags:
   - name: health
     description: Health operations
 paths:
+  /health:
+    get:
+      operationId: getHealth
+      tags: [health]
+      summary: Health check
+      description: Returns API health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
   /healthz:
     get:
       operationId: healthCheck
@@ -24,8 +37,63 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /upload:
+    post:
+      operationId: uploadXml
+      tags: [upload]
+      summary: Upload an Informatica XML file
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/XmlUploadInput"
+      responses:
+        "200":
+          description: File accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/XmlUploadResult"
+        "400":
+          description: Only XML files are accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadError"
+        "413":
+          description: File exceeds the 5 MB limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadError"
 components:
   schemas:
+    XmlUploadInput:
+      type: object
+      properties:
+        file:
+          type: string
+          format: binary
+      required:
+        - file
+    XmlUploadResult:
+      type: object
+      properties:
+        filename:
+          type: string
+        size_bytes:
+          type: integer
+      required:
+        - filename
+        - size_bytes
+    UploadError:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
     HealthStatus:
       type: object
       properties:

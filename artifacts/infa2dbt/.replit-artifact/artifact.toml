@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "infa2dbt"
+description = "A focused Informatica-to-dbt migration utility where users upload an XML export and receive clear upload validation and file details."
+version = "1.0.0"
+id = "artifacts/infa2dbt"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24518
+
+[services.development]
+run = "pnpm --filter @workspace/infa2dbt run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/infa2dbt", "run", "build" ]
+[services.production.run]
+args = ["python", "api/serve.py"]
+
+[services.production.run.env]
+PORT = "24518"
+
+
+[services.env]
+PORT = "24518"
+BASE_PATH = "/"

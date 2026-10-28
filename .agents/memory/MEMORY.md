@@ -1,0 +1,1 @@
+- [Generated multipart types](generated-multipart-types.md) — Orval maps binary upload schemas to browser `Blob` and `File` types.
