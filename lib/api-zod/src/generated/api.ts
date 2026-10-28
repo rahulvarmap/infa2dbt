@@ -8,6 +8,191 @@
 import * as zod from 'zod';
 
 
+export const ParseXmlBody = zod.object({
+  "file": zod.instanceof(Blob)
+})
+
+export const ParseXmlResponse = zod.object({
+  "sources": zod.array(zod.object({
+  "name": zod.string(),
+  "repository": zod.string(),
+  "folder": zod.string(),
+  "fields": zod.array(zod.object({
+  "name": zod.string(),
+  "datatype": zod.string(),
+  "precision": zod.string(),
+  "scale": zod.string()
+})),
+  "attributes": zod.record(zod.string(), zod.string())
+})),
+  "targets": zod.array(zod.object({
+  "name": zod.string(),
+  "repository": zod.string(),
+  "folder": zod.string(),
+  "fields": zod.array(zod.object({
+  "name": zod.string(),
+  "datatype": zod.string(),
+  "precision": zod.string(),
+  "scale": zod.string()
+})),
+  "attributes": zod.record(zod.string(), zod.string())
+})),
+  "mappings": zod.array(zod.object({
+  "name": zod.string(),
+  "repository": zod.string(),
+  "folder": zod.string(),
+  "sources": zod.array(zod.object({
+  "name": zod.string(),
+  "repository": zod.string(),
+  "folder": zod.string(),
+  "fields": zod.array(zod.object({
+  "name": zod.string(),
+  "datatype": zod.string(),
+  "precision": zod.string(),
+  "scale": zod.string()
+})),
+  "attributes": zod.record(zod.string(), zod.string())
+})),
+  "targets": zod.array(zod.object({
+  "name": zod.string(),
+  "repository": zod.string(),
+  "folder": zod.string(),
+  "fields": zod.array(zod.object({
+  "name": zod.string(),
+  "datatype": zod.string(),
+  "precision": zod.string(),
+  "scale": zod.string()
+})),
+  "attributes": zod.record(zod.string(), zod.string())
+})),
+  "transformations": zod.array(zod.object({
+  "name": zod.string(),
+  "type": zod.string(),
+  "ports": zod.array(zod.object({
+  "name": zod.string(),
+  "datatype": zod.string(),
+  "precision": zod.string(),
+  "scale": zod.string()
+}).and(zod.object({
+  "porttype": zod.string(),
+  "expression": zod.string()
+}))),
+  "attributes": zod.record(zod.string(), zod.string())
+})),
+  "instances": zod.array(zod.object({
+  "name": zod.string(),
+  "type": zod.string(),
+  "transformation_name": zod.string(),
+  "transformation_type": zod.string()
+})),
+  "connectors": zod.array(zod.object({
+  "from_instance": zod.string(),
+  "from_field": zod.string(),
+  "to_instance": zod.string(),
+  "to_field": zod.string()
+})),
+  "attributes": zod.record(zod.string(), zod.string())
+})),
+  "execution_order": zod.record(zod.string(), zod.array(zod.string()))
+})
+
+
+export const ListSamplesResponseItem = zod.object({
+  "filename": zod.string(),
+  "size_bytes": zod.number().int()
+})
+export const ListSamplesResponse = zod.array(ListSamplesResponseItem)
+
+
+export const ParseSampleParams = zod.object({
+  "filename": zod.coerce.string()
+})
+
+export const ParseSampleResponse = zod.object({
+  "sources": zod.array(zod.object({
+  "name": zod.string(),
+  "repository": zod.string(),
+  "folder": zod.string(),
+  "fields": zod.array(zod.object({
+  "name": zod.string(),
+  "datatype": zod.string(),
+  "precision": zod.string(),
+  "scale": zod.string()
+})),
+  "attributes": zod.record(zod.string(), zod.string())
+})),
+  "targets": zod.array(zod.object({
+  "name": zod.string(),
+  "repository": zod.string(),
+  "folder": zod.string(),
+  "fields": zod.array(zod.object({
+  "name": zod.string(),
+  "datatype": zod.string(),
+  "precision": zod.string(),
+  "scale": zod.string()
+})),
+  "attributes": zod.record(zod.string(), zod.string())
+})),
+  "mappings": zod.array(zod.object({
+  "name": zod.string(),
+  "repository": zod.string(),
+  "folder": zod.string(),
+  "sources": zod.array(zod.object({
+  "name": zod.string(),
+  "repository": zod.string(),
+  "folder": zod.string(),
+  "fields": zod.array(zod.object({
+  "name": zod.string(),
+  "datatype": zod.string(),
+  "precision": zod.string(),
+  "scale": zod.string()
+})),
+  "attributes": zod.record(zod.string(), zod.string())
+})),
+  "targets": zod.array(zod.object({
+  "name": zod.string(),
+  "repository": zod.string(),
+  "folder": zod.string(),
+  "fields": zod.array(zod.object({
+  "name": zod.string(),
+  "datatype": zod.string(),
+  "precision": zod.string(),
+  "scale": zod.string()
+})),
+  "attributes": zod.record(zod.string(), zod.string())
+})),
+  "transformations": zod.array(zod.object({
+  "name": zod.string(),
+  "type": zod.string(),
+  "ports": zod.array(zod.object({
+  "name": zod.string(),
+  "datatype": zod.string(),
+  "precision": zod.string(),
+  "scale": zod.string()
+}).and(zod.object({
+  "porttype": zod.string(),
+  "expression": zod.string()
+}))),
+  "attributes": zod.record(zod.string(), zod.string())
+})),
+  "instances": zod.array(zod.object({
+  "name": zod.string(),
+  "type": zod.string(),
+  "transformation_name": zod.string(),
+  "transformation_type": zod.string()
+})),
+  "connectors": zod.array(zod.object({
+  "from_instance": zod.string(),
+  "from_field": zod.string(),
+  "to_instance": zod.string(),
+  "to_field": zod.string()
+})),
+  "attributes": zod.record(zod.string(), zod.string())
+})),
+  "execution_order": zod.record(zod.string(), zod.array(zod.string()))
+})
+
+
 /**
  * Returns API health status
  * @summary Health check

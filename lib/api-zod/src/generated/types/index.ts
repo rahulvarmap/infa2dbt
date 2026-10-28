@@ -6,7 +6,20 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './connector';
+export * from './field';
 export * from './healthStatus';
+export * from './instance';
+export * from './mapping';
+export * from './mappingAttributes';
+export * from './parseResponse';
+export * from './parseResponseExecutionOrder';
+export * from './port';
+export * from './source';
+export * from './sourceAttributes';
+export * from './target';
+export * from './transformation';
+export * from './transformationAttributes';
 export * from './uploadError';
 export * from './xmlUploadInput';
 export * from './xmlUploadResult';

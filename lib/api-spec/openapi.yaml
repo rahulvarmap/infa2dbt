@@ -11,6 +11,83 @@ tags:
   - name: health
     description: Health operations
 paths:
+  /parse:
+    post:
+      operationId: parseXml
+      tags: [parser]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/XmlUploadInput"
+      responses:
+        "200":
+          description: Parsed PowerCenter intermediate representation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParseResponse"
+        "400":
+          description: Invalid XML or cyclic mapping
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadError"
+        "413":
+          description: File exceeds 5 MB
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadError"
+  /samples:
+    get:
+      operationId: listSamples
+      tags: [parser]
+      responses:
+        "200":
+          description: Available bundled XML samples
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/XmlUploadResult"
+  /samples/{filename}/parse:
+    post:
+      operationId: parseSample
+      tags: [parser]
+      parameters:
+        - in: path
+          name: filename
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Parsed bundled sample
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParseResponse"
+        "400":
+          description: Invalid sample XML
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadError"
+        "404":
+          description: Sample not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadError"
+        "413":
+          description: Sample exceeds 5 MB
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadError"
   /health:
     get:
       operationId: getHealth
@@ -69,6 +146,109 @@ paths:
                 $ref: "#/components/schemas/UploadError"
 components:
   schemas:
+    Field:
+      type: object
+      required: [name, datatype, precision, scale]
+      properties:
+        name: {type: string}
+        datatype: {type: string}
+        precision: {type: string}
+        scale: {type: string}
+    Port:
+      allOf:
+        - $ref: "#/components/schemas/Field"
+        - type: object
+          required: [porttype, expression]
+          properties:
+            porttype: {type: string}
+            expression: {type: string}
+    Source:
+      type: object
+      required: [name, fields, attributes, repository, folder]
+      properties:
+        name: {type: string}
+        repository: {type: string}
+        folder: {type: string}
+        fields:
+          type: array
+          items: {$ref: "#/components/schemas/Field"}
+        attributes:
+          type: object
+          additionalProperties: {type: string}
+    Target:
+      allOf:
+        - $ref: "#/components/schemas/Source"
+    Transformation:
+      type: object
+      required: [name, type, ports, attributes]
+      properties:
+        name: {type: string}
+        type: {type: string}
+        ports:
+          type: array
+          items: {$ref: "#/components/schemas/Port"}
+        attributes:
+          type: object
+          additionalProperties: {type: string}
+    Instance:
+      type: object
+      required: [name, type, transformation_name, transformation_type]
+      properties:
+        name: {type: string}
+        type: {type: string}
+        transformation_name: {type: string}
+        transformation_type: {type: string}
+    Connector:
+      type: object
+      required: [from_instance, from_field, to_instance, to_field]
+      properties:
+        from_instance: {type: string}
+        from_field: {type: string}
+        to_instance: {type: string}
+        to_field: {type: string}
+    Mapping:
+      type: object
+      required: [name, repository, folder, sources, targets, transformations, instances, connectors, attributes]
+      properties:
+        name: {type: string}
+        repository: {type: string}
+        folder: {type: string}
+        sources:
+          type: array
+          items: {$ref: "#/components/schemas/Source"}
+        targets:
+          type: array
+          items: {$ref: "#/components/schemas/Target"}
+        transformations:
+          type: array
+          items: {$ref: "#/components/schemas/Transformation"}
+        instances:
+          type: array
+          items: {$ref: "#/components/schemas/Instance"}
+        connectors:
+          type: array
+          items: {$ref: "#/components/schemas/Connector"}
+        attributes:
+          type: object
+          additionalProperties: {type: string}
+    ParseResponse:
+      type: object
+      required: [sources, targets, mappings, execution_order]
+      properties:
+        sources:
+          type: array
+          items: {$ref: "#/components/schemas/Source"}
+        targets:
+          type: array
+          items: {$ref: "#/components/schemas/Target"}
+        mappings:
+          type: array
+          items: {$ref: "#/components/schemas/Mapping"}
+        execution_order:
+          type: object
+          additionalProperties:
+            type: array
+            items: {type: string}
     XmlUploadInput:
       type: object
       properties:

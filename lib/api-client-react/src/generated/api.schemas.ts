@@ -5,6 +5,76 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+export interface Field {
+  name: string;
+  datatype: string;
+  precision: string;
+  scale: string;
+}
+
+export type Port = Field & {
+  porttype: string;
+  expression: string;
+};
+
+export type SourceAttributes = {[key: string]: string};
+
+export interface Source {
+  name: string;
+  repository: string;
+  folder: string;
+  fields: Field[];
+  attributes: SourceAttributes;
+}
+
+export type Target = Source;
+
+export type TransformationAttributes = {[key: string]: string};
+
+export interface Transformation {
+  name: string;
+  type: string;
+  ports: Port[];
+  attributes: TransformationAttributes;
+}
+
+export interface Instance {
+  name: string;
+  type: string;
+  transformation_name: string;
+  transformation_type: string;
+}
+
+export interface Connector {
+  from_instance: string;
+  from_field: string;
+  to_instance: string;
+  to_field: string;
+}
+
+export type MappingAttributes = {[key: string]: string};
+
+export interface Mapping {
+  name: string;
+  repository: string;
+  folder: string;
+  sources: Source[];
+  targets: Target[];
+  transformations: Transformation[];
+  instances: Instance[];
+  connectors: Connector[];
+  attributes: MappingAttributes;
+}
+
+export type ParseResponseExecutionOrder = {[key: string]: string[]};
+
+export interface ParseResponse {
+  sources: Source[];
+  targets: Target[];
+  mappings: Mapping[];
+  execution_order: ParseResponseExecutionOrder;
+}
+
 export interface XmlUploadInput {
   file: Blob | File;
 }

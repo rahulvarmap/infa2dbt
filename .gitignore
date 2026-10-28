@@ -17,6 +17,9 @@ out-tsc
 # dependencies
 node_modules
 .pythonlibs/
+__pycache__/
+*.py[cod]
+.pytest_cache/
 
 # IDEs and editors
 /.idea

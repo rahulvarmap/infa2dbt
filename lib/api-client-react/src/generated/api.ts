@@ -21,6 +21,7 @@ import type {
 
 import type {
   HealthStatus,
+  ParseResponse,
   UploadError,
   XmlUploadInput,
   XmlUploadResult
@@ -52,6 +53,215 @@ const withQueryKey = <T extends object, K>(query: T, queryKey: K): T & { queryKe
   }
   return result;
 };
+
+export const getParseXmlUrl = () => {
+
+
+
+
+  return `/api/parse`
+}
+
+export const parseXml = async (xmlUploadInput: XmlUploadInput, options?: Parameters<typeof customFetch>[1]): Promise<ParseResponse> => {
+    const formData = new FormData();
+formData.append(`file`, xmlUploadInput.file);
+
+  return customFetch<ParseResponse>(getParseXmlUrl(),
+  {
+    ...options,
+    method: 'POST'
+    ,
+    body: formData
+  }
+);}
+
+
+
+
+
+export const getParseXmlMutationKey = () => ['parseXml'] as const;
+
+export const getParseXmlMutationOptions = <TError = ErrorType<UploadError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof parseXml>>, TError,ParseXmlMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof parseXml>>, TError,ParseXmlMutationVariables, TContext> => {
+
+const mutationKey = getParseXmlMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof parseXml>>, ParseXmlMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  parseXml(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ParseXmlMutationResult = NonNullable<Awaited<ReturnType<typeof parseXml>>>
+    export type ParseXmlMutationBody = BodyType<XmlUploadInput>
+    export type ParseXmlMutationError = ErrorType<UploadError>
+    export type ParseXmlMutationVariables = {data: BodyType<XmlUploadInput>}
+
+    export const useParseXml = <TError = ErrorType<UploadError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof parseXml>>, TError,ParseXmlMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof parseXml>>,
+        TError,
+        ParseXmlMutationVariables,
+        TContext
+      > => {
+      return useMutation(getParseXmlMutationOptions(options));
+    }
+
+export const getListSamplesUrl = () => {
+
+
+
+
+  return `/api/samples`
+}
+
+export const listSamples = async ( options?: Parameters<typeof customFetch>[1]): Promise<XmlUploadResult[]> => {
+
+  return customFetch<XmlUploadResult[]>(getListSamplesUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListSamplesQueryKey = () => {
+    return [
+    `/api/samples`
+    ] as const;
+    }
+
+
+export const getListSamplesQueryOptions = <TData = Awaited<ReturnType<typeof listSamples>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSamples>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListSamplesQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSamples>>> = ({ signal }) => listSamples({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listSamples>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListSamplesQueryResult = NonNullable<Awaited<ReturnType<typeof listSamples>>>
+export type ListSamplesQueryError = ErrorType<unknown>
+
+
+
+export function useListSamples<TData = Awaited<ReturnType<typeof listSamples>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSamples>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListSamplesQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getParseSampleUrl = (filename: string,) => {
+
+
+
+
+  return `/api/samples/${filename}/parse`
+}
+
+export const parseSample = async (filename: string, options?: Parameters<typeof customFetch>[1]): Promise<ParseResponse> => {
+
+  return customFetch<ParseResponse>(getParseSampleUrl(filename),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getParseSampleMutationKey = () => ['parseSample'] as const;
+
+export const getParseSampleMutationOptions = <TError = ErrorType<UploadError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof parseSample>>, TError,ParseSampleMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof parseSample>>, TError,ParseSampleMutationVariables, TContext> => {
+
+const mutationKey = getParseSampleMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof parseSample>>, ParseSampleMutationVariables> = (props) => {
+          const {filename} = props ?? {};
+
+          return  parseSample(filename,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ParseSampleMutationResult = NonNullable<Awaited<ReturnType<typeof parseSample>>>
+
+    export type ParseSampleMutationError = ErrorType<UploadError>
+    export type ParseSampleMutationVariables = {filename: string}
+
+    export const useParseSample = <TError = ErrorType<UploadError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof parseSample>>, TError,ParseSampleMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof parseSample>>,
+        TError,
+        ParseSampleMutationVariables,
+        TContext
+      > => {
+      return useMutation(getParseSampleMutationOptions(options));
+    }
 
 export const getGetHealthUrl = () => {
 

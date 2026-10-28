@@ -5,8 +5,13 @@ import {
   getHealthCheckQueryKey,
   useGetHealth,
   useHealthCheck,
+  useListSamples,
+  useParseSample,
+  useParseXml,
   useUploadXml,
 } from '@workspace/api-client-react';
+import type { ParseResponse } from '@workspace/api-client-react';
+import { ParseInspector } from '@/components/parse-inspector';
 import {
   AlertCircle,
   ArrowUpFromLine,
@@ -36,6 +41,8 @@ function formatBytes(bytes: number) {
 }
 
 function messageFromError(error: unknown) {
+  const data = (error as { data?: { error?: unknown } } | null)?.data;
+  if (data && typeof data.error === 'string') return data.error;
   if (error instanceof Error && error.message) return error.message;
   return 'The upload could not be completed. Please try again.';
 }
@@ -55,6 +62,13 @@ function Home() {
     query: { queryKey: getHealthCheckQueryKey(), refetchInterval: 30_000, retry: 1 },
   });
   const upload = useUploadXml();
+  const parseXml = useParseXml();
+  const parseSample = useParseSample();
+  const samples = useListSamples();
+  const [parsed, setParsed] = useState<ParseResponse | null>(null);
+  const [parsedLabel, setParsedLabel] = useState('');
+  const [activeSample, setActiveSample] = useState<string | null>(null);
+  const busy = upload.isPending || parseXml.isPending || parseSample.isPending;
 
   useEffect(() => {
     const saved = window.localStorage.getItem('infa2dbt-theme');
@@ -73,8 +87,12 @@ function Home() {
 
   function selectFile(candidate: File | undefined) {
     setValidationError('');
+    if (busy) return;
     setResult(null);
+    setParsed(null);
     upload.reset();
+    parseXml.reset();
+    parseSample.reset();
     if (!candidate) return;
     if (!candidate.name.toLowerCase().endsWith('.xml')) {
       setFile(null);
@@ -100,23 +118,53 @@ function Home() {
     selectFile(event.dataTransfer.files?.[0]);
   }
 
-  function onSubmit() {
-    if (!file || upload.isPending) return;
+  async function onSubmit() {
+    if (!file || busy) return;
     setValidationError('');
     setResult(null);
-    upload.mutate(
-      { data: { file } },
-      {
-        onSuccess: (response) => setResult(response),
-      },
-    );
+    setParsed(null);
+    parseXml.reset();
+    parseSample.reset();
+    try {
+      const response = await upload.mutateAsync({ data: { file } });
+      setResult(response);
+      const ir = await parseXml.mutateAsync({ data: { file } });
+      setParsed(ir);
+      setParsedLabel(response.filename);
+    } catch {
+      setParsed(null);
+    }
+  }
+
+  async function onSample(filename: string) {
+    if (busy) return;
+    setValidationError('');
+    setResult(null);
+    setParsed(null);
+    setFile(null);
+    upload.reset();
+    parseXml.reset();
+    setActiveSample(filename);
+    try {
+      const ir = await parseSample.mutateAsync({ filename });
+      setParsed(ir);
+      setParsedLabel(`sample / ${filename}`);
+    } catch {
+      setParsed(null);
+    } finally {
+      setActiveSample(null);
+    }
   }
 
   function clearFile() {
+    if (busy) return;
     setFile(null);
     setResult(null);
+    setParsed(null);
     setValidationError('');
     upload.reset();
+    parseXml.reset();
+    parseSample.reset();
   }
 
   return (
@@ -150,7 +198,7 @@ function Home() {
         <div className="eyebrow">Migration intake · XML</div>
         <h1 className="hero-title">Informatica <em>→ dbt Migrator</em></h1>
         <p className="hero-copy">
-          Send an Informatica XML file through a simple, secure intake. We validate the upload and return its file details—nothing more.
+          Send an Informatica XML file through a simple, secure intake. We validate it, then parse its sources, transformations, ports and connectors into an inspectable structure you can read before migrating.
         </p>
 
         <section className="intake-card" aria-label="XML file upload">
@@ -175,7 +223,7 @@ function Home() {
                     <p className="file-name" title={file.name}>{file.name}</p>
                     <p className="file-meta">{formatBytes(file.size)} · XML document</p>
                   </div>
-                  <button type="button" className="remove-file" onClick={clearFile} aria-label="Remove selected file" data-testid="button-remove-file">
+                  <button type="button" className="remove-file" onClick={clearFile} disabled={busy} aria-label="Remove selected file" data-testid="button-remove-file">
                     <X size={17} />
                   </button>
                 </div>
@@ -230,6 +278,18 @@ function Home() {
               <span>{messageFromError(upload.error)}</span>
             </div>
           )}
+          {parseXml.isError && (
+            <div className="error-message" role="alert" data-testid="error-parse">
+              <AlertCircle size={17} className="mt-0.5 shrink-0" />
+              <span>Upload succeeded, but parsing failed: {messageFromError(parseXml.error)}</span>
+            </div>
+          )}
+          {parseSample.isError && (
+            <div className="error-message" role="alert" data-testid="error-parse-sample">
+              <AlertCircle size={17} className="mt-0.5 shrink-0" />
+              <span>The sample could not be parsed: {messageFromError(parseSample.error)}</span>
+            </div>
+          )}
 
           <div className="action-bar">
             <div className="privacy-note">
@@ -239,27 +299,30 @@ function Home() {
             <button
               type="button"
               className="primary-action"
-              onClick={onSubmit}
-              disabled={!file || upload.isPending}
+              onClick={() => { void onSubmit(); }}
+              disabled={!file || busy}
               data-testid="button-upload-xml"
             >
-              {upload.isPending ? (
+              {upload.isPending || parseXml.isPending ? (
                 <>
                   <LoaderCircle size={16} className="animate-spin" />
-                  Validating file…
+                  {upload.isPending ? 'Validating file…' : 'Parsing mapping…'}
                 </>
               ) : (
                 <>
                   <ArrowUpFromLine size={16} />
-                  Validate XML
+                  Validate and parse
                 </>
               )}
             </button>
           </div>
 
           {result && (
-            <div className="success-panel" role="status" aria-live="polite" data-testid="status-upload-success">
-              <div className="success-heading"><Check size={17} /> File received and validated</div>
+            <div className={parseXml.isError ? 'upload-details-panel' : 'success-panel'} role="status" aria-live="polite" data-testid="status-upload-success">
+              <div className="success-heading">
+                {parseXml.isError ? <FileText size={17} /> : <Check size={17} />}
+                {parseXml.isError ? 'Upload details · parsing failed' : parsed ? 'File received and parsed' : 'File received · parsing…'}
+              </div>
               <div className="result-row">
                 <div className="file-type-icon"><FileCode2 size={20} /></div>
                 <div className="file-info">
@@ -271,23 +334,57 @@ function Home() {
           )}
         </section>
 
-        <div className="section-rule">The intake, in three steps</div>
-        <div className="flow-strip" aria-label="Upload process">
+        <div className="section-rule">Bundled samples</div>
+        <div className="sample-list" data-testid="list-samples">
+          {samples.isLoading && [0, 1].map((n) => <div key={n} className="sample-skeleton" />)}
+          {samples.isError && (
+            <div className="error-message" role="alert" data-testid="error-samples">
+              <AlertCircle size={17} className="mt-0.5 shrink-0" />
+              <span>Samples could not be loaded.</span>
+              <button type="button" className="ml-auto shrink-0 font-semibold underline" onClick={() => { void samples.refetch(); }} data-testid="button-retry-samples">Retry</button>
+            </div>
+          )}
+          {samples.data && samples.data.length === 0 && <p className="drop-caption">No bundled samples available.</p>}
+          {samples.data?.map((sample) => (
+            <div key={sample.filename} className="sample-row" data-testid={`row-sample-${sample.filename}`}>
+              <div className="file-info">
+                <p className="file-name" title={sample.filename}>{sample.filename}</p>
+                <p className="file-meta">{formatBytes(sample.size_bytes)}</p>
+              </div>
+              <button type="button" className="sample-button" disabled={busy} onClick={() => { void onSample(sample.filename); }} data-testid={`button-try-sample-${sample.filename}`}>
+                {activeSample === sample.filename ? <LoaderCircle size={14} className="animate-spin" /> : null}
+                Try sample
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {(parsed || parseXml.isPending || parseSample.isPending) && (
+          <>
+            <div className="section-rule">Parsed mapping</div>
+            {parsed ? <ParseInspector data={parsed} label={parsedLabel} /> : (
+              <div className="inspector" data-testid="status-parsing"><div className="sample-skeleton" /><div className="sample-skeleton" /><div className="sample-skeleton" /></div>
+            )}
+          </>
+        )}
+
+        <div className="section-rule">What gets parsed</div>
+        <div className="flow-strip" aria-label="Parsed structure">
           <div className="flow-step">
             <span className="step-number">01</span>
-            <p>Select an XML<small>Choose a file up to 5 MB</small></p>
+            <p>Sources and targets<small>Tables, fields, datatypes, precision</small></p>
           </div>
           <div className="flow-step">
             <span className="step-number">02</span>
-            <p>Validate upload<small>We check the file request</small></p>
+            <p>Transformations<small>Types, ports and expressions</small></p>
           </div>
           <div className="flow-step">
             <span className="step-number">03</span>
-            <p>Review details<small>Filename and byte count returned</small></p>
+            <p>Connectors<small>Field-level wiring and execution order</small></p>
           </div>
         </div>
         <footer className="footer-note">
-          <span>INFA2DBT · FILE INTAKE</span>
+          <span>INFA2DBT · MAPPING INSPECTOR</span>
           <span>One file at a time. No content stored.</span>
         </footer>
       </main>
