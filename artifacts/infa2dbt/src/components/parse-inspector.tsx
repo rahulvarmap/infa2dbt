@@ -1,16 +1,13 @@
 import { useMemo, useState } from 'react';
-import type { Mapping, ParseResponse } from '@workspace/api-client-react';
+import type { ParseResponse } from '@workspace/api-client-react';
+import { LineageView } from '@/components/lineage/lineage-view';
+import { orderKey, type ParsedSource } from '@/components/lineage/lineage-utils';
 
-type Tab = 'summary' | 'ports' | 'raw';
+type Tab = 'lineage' | 'summary' | 'ports' | 'raw';
 
-function orderKey(data: ParseResponse, m: Mapping) {
-  const dup = data.mappings.filter((x) => x.name === m.name).length > 1;
-  return dup ? `${m.repository}/${m.folder}/${m.name}` : m.name;
-}
-
-export function ParseInspector({ data, label }: { data: ParseResponse; label: string }) {
+export function ParseInspector({ data, label, source }: { data: ParseResponse; label: string; source: ParsedSource | null }) {
   const [mapIdx, setMapIdx] = useState(0);
-  const [tab, setTab] = useState<Tab>('summary');
+  const [tab, setTab] = useState<Tab>('lineage');
   const [tIdx, setTIdx] = useState(0);
   const [rawOpen, setRawOpen] = useState(false);
   const mapping = data.mappings[Math.min(mapIdx, data.mappings.length - 1)];
@@ -29,11 +26,14 @@ export function ParseInspector({ data, label }: { data: ParseResponse; label: st
         )}
       </div>
       <div className="tabs" role="tablist" aria-label="Parsed mapping views">
-        {(['summary', 'ports', 'raw'] as Tab[]).map((t) => (
+        {(['lineage', 'summary', 'ports', 'raw'] as Tab[]).map((t) => (
           <button key={t} role="tab" type="button" aria-selected={tab === t} className="tab" data-active={tab === t} onClick={() => setTab(t)} data-testid={`tab-${t}`}>{t}</button>
         ))}
       </div>
       {!mapping && tab !== 'raw' ? <p className="drop-caption">No mappings found in this file.</p> : null}
+      {mapping && tab === 'lineage' && (
+        <div data-testid="panel-lineage"><LineageView data={data} mapping={mapping} source={source} /></div>
+      )}
       {mapping && tab === 'summary' && (
         <div data-testid="panel-summary">
           <h3 className="mapping-name" data-testid="text-mapping-name">{mapping.name}</h3>

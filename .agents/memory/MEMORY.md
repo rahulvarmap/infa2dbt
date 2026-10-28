@@ -1,2 +1,0 @@
-- [Generated multipart types](generated-multipart-types.md) — Orval maps binary upload schemas to browser `Blob` and `File` types.
-- [Python installer side effects](python-installer-side-effects.md) — Check generated Nix dependencies after Python installs; unsupported macOS tools may be added automatically.

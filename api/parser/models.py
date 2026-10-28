@@ -64,5 +64,43 @@ class ParseResult(BaseModel):
     mappings: list[Mapping] = ModelField(default_factory=list)
 
 
+class LineageNode(BaseModel):
+    id: str
+    name: str
+    type: str
+    mapping: str
+
+
+class FieldPair(BaseModel):
+    from_field: str
+    to_field: str
+
+
+class LineageEdge(BaseModel):
+    id: str
+    source: str
+    target: str
+    fields: list[FieldPair] = ModelField(default_factory=list)
+    mapping: str
+
+
+class LineageData(BaseModel):
+    nodes: list[LineageNode] = ModelField(default_factory=list)
+    edges: list[LineageEdge] = ModelField(default_factory=list)
+
+
+class LineageHop(BaseModel):
+    instance: str
+    port: str
+    type: str
+    expression: str = ""
+
+
+class TraceResponse(BaseModel):
+    mapping: str
+    hops: list[LineageHop]
+
+
 class ParseResponse(ParseResult):
     execution_order: dict[str, list[str]] = ModelField(default_factory=dict)
+    lineage: LineageData = ModelField(default_factory=LineageData)

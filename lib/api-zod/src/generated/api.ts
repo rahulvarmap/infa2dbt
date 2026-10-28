@@ -93,7 +93,25 @@ export const ParseXmlResponse = zod.object({
 })),
   "attributes": zod.record(zod.string(), zod.string())
 })),
-  "execution_order": zod.record(zod.string(), zod.array(zod.string()))
+  "execution_order": zod.record(zod.string(), zod.array(zod.string())),
+  "lineage": zod.object({
+  "nodes": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "type": zod.string(),
+  "mapping": zod.string()
+})),
+  "edges": zod.array(zod.object({
+  "id": zod.string(),
+  "source": zod.string(),
+  "target": zod.string(),
+  "mapping": zod.string(),
+  "fields": zod.array(zod.object({
+  "from_field": zod.string(),
+  "to_field": zod.string()
+}))
+}))
+})
 })
 
 
@@ -189,7 +207,25 @@ export const ParseSampleResponse = zod.object({
 })),
   "attributes": zod.record(zod.string(), zod.string())
 })),
-  "execution_order": zod.record(zod.string(), zod.array(zod.string()))
+  "execution_order": zod.record(zod.string(), zod.array(zod.string())),
+  "lineage": zod.object({
+  "nodes": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "type": zod.string(),
+  "mapping": zod.string()
+})),
+  "edges": zod.array(zod.object({
+  "id": zod.string(),
+  "source": zod.string(),
+  "target": zod.string(),
+  "mapping": zod.string(),
+  "fields": zod.array(zod.object({
+  "from_field": zod.string(),
+  "to_field": zod.string()
+}))
+}))
+})
 })
 
 
@@ -221,6 +257,29 @@ export const UploadXmlBody = zod.object({
 export const UploadXmlResponse = zod.object({
   "filename": zod.string(),
   "size_bytes": zod.int()
+})
+
+
+/**
+ * Provide exactly one file or sample_name. Use mapping to disambiguate instances across mappings.
+ * @summary Trace a field backward to its source fields
+ */
+export const TraceLineageBody = zod.object({
+  "file": zod.instanceof(Blob).optional(),
+  "sample_name": zod.string().optional(),
+  "target_instance": zod.string(),
+  "target_field": zod.string(),
+  "mapping": zod.string().optional()
+})
+
+export const TraceLineageResponse = zod.object({
+  "mapping": zod.string(),
+  "hops": zod.array(zod.object({
+  "instance": zod.string(),
+  "port": zod.string(),
+  "type": zod.string(),
+  "expression": zod.string()
+}))
 })
 
 

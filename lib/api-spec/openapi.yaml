@@ -144,8 +144,52 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UploadError"
+  /lineage/trace:
+    post:
+      operationId: traceLineage
+      tags: [lineage]
+      summary: Trace a field backward to its source fields
+      description: Provide exactly one file or sample_name. Use mapping to disambiguate instances across mappings.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/LineageTraceInput"
+      responses:
+        "200":
+          description: Ordered target-to-source lineage hops
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TraceResponse"}
+        "400":
+          description: Invalid XML, ambiguous instance, invalid field, or invalid file/sample selection
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UploadError"}
+        "404":
+          description: Sample not found
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UploadError"}
+        "413":
+          description: File exceeds 5 MB
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UploadError"}
+        "422":
+          description: Missing required form fields
 components:
   schemas:
+    LineageTraceInput:
+      type: object
+      required: [target_instance, target_field]
+      properties:
+        file: {type: string, format: binary}
+        sample_name: {type: string}
+        target_instance: {type: string}
+        target_field: {type: string}
+        mapping: {type: string}
     Field:
       type: object
       required: [name, datatype, precision, scale]
@@ -231,9 +275,60 @@ components:
         attributes:
           type: object
           additionalProperties: {type: string}
+    LineageNode:
+      type: object
+      required: [id, name, type, mapping]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        type: {type: string}
+        mapping: {type: string}
+    FieldPair:
+      type: object
+      required: [from_field, to_field]
+      properties:
+        from_field: {type: string}
+        to_field: {type: string}
+    LineageEdge:
+      type: object
+      required: [id, source, target, fields, mapping]
+      properties:
+        id: {type: string}
+        source: {type: string}
+        target: {type: string}
+        mapping: {type: string}
+        fields:
+          type: array
+          items: {$ref: "#/components/schemas/FieldPair"}
+    LineageData:
+      type: object
+      required: [nodes, edges]
+      properties:
+        nodes:
+          type: array
+          items: {$ref: "#/components/schemas/LineageNode"}
+        edges:
+          type: array
+          items: {$ref: "#/components/schemas/LineageEdge"}
+    LineageHop:
+      type: object
+      required: [instance, port, type, expression]
+      properties:
+        instance: {type: string}
+        port: {type: string}
+        type: {type: string}
+        expression: {type: string}
+    TraceResponse:
+      type: object
+      required: [mapping, hops]
+      properties:
+        mapping: {type: string}
+        hops:
+          type: array
+          items: {$ref: "#/components/schemas/LineageHop"}
     ParseResponse:
       type: object
-      required: [sources, targets, mappings, execution_order]
+      required: [sources, targets, mappings, execution_order, lineage]
       properties:
         sources:
           type: array
@@ -249,6 +344,8 @@ components:
           additionalProperties:
             type: array
             items: {type: string}
+        lineage:
+          $ref: "#/components/schemas/LineageData"
     XmlUploadInput:
       type: object
       properties:

@@ -21,7 +21,9 @@ import type {
 
 import type {
   HealthStatus,
+  LineageTraceInput,
   ParseResponse,
+  TraceResponse,
   UploadError,
   XmlUploadInput,
   XmlUploadResult
@@ -493,5 +495,92 @@ export const useUploadXml = <TError = ErrorType<UploadError>,
         TContext
       > => {
       return useMutation(getUploadXmlMutationOptions(options));
+    }
+
+export const getTraceLineageUrl = () => {
+
+
+
+
+  return `/api/lineage/trace`
+}
+
+/**
+ * Provide exactly one file or sample_name. Use mapping to disambiguate instances across mappings.
+ * @summary Trace a field backward to its source fields
+ */
+export const traceLineage = async (lineageTraceInput: LineageTraceInput, options?: Parameters<typeof customFetch>[1]): Promise<TraceResponse> => {
+    const formData = new FormData();
+if(lineageTraceInput.file !== undefined) {
+ formData.append(`file`, lineageTraceInput.file);
+ }
+if(lineageTraceInput.sample_name !== undefined) {
+ formData.append(`sample_name`, lineageTraceInput.sample_name);
+ }
+formData.append(`target_instance`, lineageTraceInput.target_instance);
+formData.append(`target_field`, lineageTraceInput.target_field);
+if(lineageTraceInput.mapping !== undefined) {
+ formData.append(`mapping`, lineageTraceInput.mapping);
+ }
+
+  return customFetch<TraceResponse>(getTraceLineageUrl(),
+  {
+    ...options,
+    method: 'POST'
+    ,
+    body: formData
+  }
+);}
+
+
+
+
+
+export const getTraceLineageMutationKey = () => ['traceLineage'] as const;
+
+export const getTraceLineageMutationOptions = <TError = ErrorType<UploadError | void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof traceLineage>>, TError,TraceLineageMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof traceLineage>>, TError,TraceLineageMutationVariables, TContext> => {
+
+const mutationKey = getTraceLineageMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof traceLineage>>, TraceLineageMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  traceLineage(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type TraceLineageMutationResult = NonNullable<Awaited<ReturnType<typeof traceLineage>>>
+    export type TraceLineageMutationBody = BodyType<LineageTraceInput>
+    export type TraceLineageMutationError = ErrorType<UploadError | void>
+    export type TraceLineageMutationVariables = {data: BodyType<LineageTraceInput>}
+
+    /**
+ * @summary Trace a field backward to its source fields
+ */
+export const useTraceLineage = <TError = ErrorType<UploadError | void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof traceLineage>>, TError,TraceLineageMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof traceLineage>>,
+        TError,
+        TraceLineageMutationVariables,
+        TContext
+      > => {
+      return useMutation(getTraceLineageMutationOptions(options));
     }
 

@@ -26,6 +26,8 @@ def test_parse_sample_upload(path):
     assert len(result["mappings"][0]["instances"]) == 5
     assert len(result["mappings"][0]["connectors"]) == 35
     assert result["execution_order"]["m_member_enrollment"] == EXPECTED_ORDER
+    assert len(result["lineage"]["nodes"]) == 5
+    assert len(result["lineage"]["edges"]) == 4
 
 
 @pytest.mark.parametrize("path", ["/upload", "/parse"])
@@ -74,3 +76,71 @@ def test_duplicate_mapping_names_are_context_qualified():
     )
     response = request("POST", "/parse", files={"file": ("multiple.xml", xml)})
     assert response.json()["execution_order"] == {"r/a/m": [], "r/b/m": []}
+
+
+@pytest.mark.parametrize("path", ["/lineage/trace", "/api/lineage/trace"])
+@pytest.mark.parametrize("use_sample", [False, True])
+def test_trace_upload_or_sample(path, use_sample):
+    data = {"target_instance": "DIM_MEMBER", "target_field": "GENDER_DESC"}
+    kwargs = {"data": data}
+    if use_sample:
+        data["sample_name"] = SAMPLE.name
+    else:
+        kwargs["files"] = {"file": ("sample.xml", SAMPLE.read_bytes())}
+    response = request("POST", path, **kwargs)
+    assert response.status_code == 200
+    result = response.json()
+    assert result["mapping"] == "m_member_enrollment"
+    assert len(result["hops"]) == 6
+    assert result["hops"][-1]["instance"] == "MEMBER_ENROLLMENT"
+    assert "DECODE" in result["hops"][2]["expression"]
+
+
+def test_trace_validation_and_no_sample_path_traversal():
+    data = {"target_instance": "DIM_MEMBER", "target_field": "GENDER_DESC"}
+    assert request("POST", "/api/lineage/trace", data=data).status_code == 400
+    both = {**data, "sample_name": SAMPLE.name}
+    assert request("POST", "/api/lineage/trace", data=both, files={
+        "file": ("sample.xml", SAMPLE.read_bytes()),
+    }).status_code == 400
+    for sample_name in ["missing.xml", "../pyproject.toml", str(SAMPLE.resolve())]:
+        response = request("POST", "/api/lineage/trace", data={**data, "sample_name": sample_name})
+        assert response.status_code == 404
+    assert request("POST", "/api/lineage/trace", data=data, files={
+        "file": ("not.txt", b"bad"),
+    }).status_code == 400
+    assert request("POST", "/api/lineage/trace", data=data, files={
+        "file": ("huge.xml", b"x" * (MAX_FILE_SIZE + 1)),
+    }).status_code == 413
+    assert request("POST", "/api/lineage/trace", data=data, files={
+        "file": ("broken.xml", b"<bad"),
+    }).status_code == 400
+    assert request("POST", "/api/lineage/trace", data={"sample_name": SAMPLE.name}).status_code == 422
+    for patch in [{"target_field": "missing"}, {"target_instance": "missing"}, {"mapping": "missing"}]:
+        response = request("POST", "/api/lineage/trace", data={
+            **data, "sample_name": SAMPLE.name, **patch,
+        })
+        assert response.status_code == 400
+
+
+def test_multi_mapping_graph_and_trace_disambiguation():
+    import re
+
+    contents = SAMPLE.read_bytes()
+    mapping_xml = re.search(rb"<MAPPING\b.*?</MAPPING>", contents, re.DOTALL).group()
+    second = mapping_xml.replace(b'NAME="m_member_enrollment"', b'NAME="second_mapping"', 1)
+    contents = contents.replace(b"</FOLDER>", second + b"</FOLDER>")
+    files = {"file": ("multiple.xml", contents)}
+    parsed = request("POST", "/api/parse", files=files).json()
+    graph = parsed["lineage"]
+    assert len(graph["nodes"]) == len({n["id"] for n in graph["nodes"]}) == 10
+    assert len(graph["edges"]) == 8
+    data = {"target_instance": "DIM_MEMBER", "target_field": "FULL_NAME"}
+    assert request("POST", "/api/lineage/trace", files=files, data=data).status_code == 400
+    response = request("POST", "/api/lineage/trace", files=files, data={
+        **data, "mapping": "second_mapping",
+    })
+    assert response.status_code == 200
+    assert response.json()["mapping"] == "second_mapping"
+    source_fields = {h["port"] for h in response.json()["hops"] if h["type"] == "Source"}
+    assert source_fields == {"FIRST_NAME", "LAST_NAME"}

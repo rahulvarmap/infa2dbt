@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { LineageData } from './lineageData';
 import type { Mapping } from './mapping';
 import type { ParseResponseExecutionOrder } from './parseResponseExecutionOrder';
 import type { Source } from './source';
@@ -15,4 +16,5 @@ export interface ParseResponse {
   targets: Target[];
   mappings: Mapping[];
   execution_order: ParseResponseExecutionOrder;
+  lineage: LineageData;
 }

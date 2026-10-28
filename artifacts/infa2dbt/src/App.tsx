@@ -12,6 +12,7 @@ import {
 } from '@workspace/api-client-react';
 import type { ParseResponse } from '@workspace/api-client-react';
 import { ParseInspector } from '@/components/parse-inspector';
+import type { ParsedSource } from '@/components/lineage/lineage-utils';
 import {
   AlertCircle,
   ArrowUpFromLine,
@@ -67,6 +68,7 @@ function Home() {
   const samples = useListSamples();
   const [parsed, setParsed] = useState<ParseResponse | null>(null);
   const [parsedLabel, setParsedLabel] = useState('');
+  const [parsedSource, setParsedSource] = useState<ParsedSource | null>(null);
   const [activeSample, setActiveSample] = useState<string | null>(null);
   const busy = upload.isPending || parseXml.isPending || parseSample.isPending;
 
@@ -89,7 +91,7 @@ function Home() {
     setValidationError('');
     if (busy) return;
     setResult(null);
-    setParsed(null);
+    setParsed(null); setParsedSource(null);
     upload.reset();
     parseXml.reset();
     parseSample.reset();
@@ -122,17 +124,18 @@ function Home() {
     if (!file || busy) return;
     setValidationError('');
     setResult(null);
-    setParsed(null);
+    setParsed(null); setParsedSource(null);
     parseXml.reset();
     parseSample.reset();
     try {
       const response = await upload.mutateAsync({ data: { file } });
       setResult(response);
       const ir = await parseXml.mutateAsync({ data: { file } });
+      setParsedSource({ kind: 'file', file });
       setParsed(ir);
       setParsedLabel(response.filename);
     } catch {
-      setParsed(null);
+      setParsed(null); setParsedSource(null);
     }
   }
 
@@ -140,17 +143,18 @@ function Home() {
     if (busy) return;
     setValidationError('');
     setResult(null);
-    setParsed(null);
+    setParsed(null); setParsedSource(null);
     setFile(null);
     upload.reset();
     parseXml.reset();
     setActiveSample(filename);
     try {
       const ir = await parseSample.mutateAsync({ filename });
+      setParsedSource({ kind: 'sample', name: filename });
       setParsed(ir);
       setParsedLabel(`sample / ${filename}`);
     } catch {
-      setParsed(null);
+      setParsed(null); setParsedSource(null);
     } finally {
       setActiveSample(null);
     }
@@ -160,7 +164,7 @@ function Home() {
     if (busy) return;
     setFile(null);
     setResult(null);
-    setParsed(null);
+    setParsed(null); setParsedSource(null);
     setValidationError('');
     upload.reset();
     parseXml.reset();
@@ -362,7 +366,7 @@ function Home() {
         {(parsed || parseXml.isPending || parseSample.isPending) && (
           <>
             <div className="section-rule">Parsed mapping</div>
-            {parsed ? <ParseInspector data={parsed} label={parsedLabel} /> : (
+            {parsed ? <ParseInspector key={parsedLabel + String(parsed.mappings.length)} data={parsed} label={parsedLabel} source={parsedSource} /> : (
               <div className="inspector" data-testid="status-parsing"><div className="sample-skeleton" /><div className="sample-skeleton" /><div className="sample-skeleton" /></div>
             )}
           </>

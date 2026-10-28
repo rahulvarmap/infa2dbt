@@ -8,8 +8,14 @@
 
 export * from './connector';
 export * from './field';
+export * from './fieldPair';
 export * from './healthStatus';
 export * from './instance';
+export * from './lineageData';
+export * from './lineageEdge';
+export * from './lineageHop';
+export * from './lineageNode';
+export * from './lineageTraceInput';
 export * from './mapping';
 export * from './mappingAttributes';
 export * from './parseResponse';
@@ -18,6 +24,7 @@ export * from './port';
 export * from './source';
 export * from './sourceAttributes';
 export * from './target';
+export * from './traceResponse';
 export * from './transformation';
 export * from './transformationAttributes';
 export * from './uploadError';

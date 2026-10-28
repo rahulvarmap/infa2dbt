@@ -5,6 +5,14 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+export interface LineageTraceInput {
+  file?: Blob | File;
+  sample_name?: string;
+  target_instance: string;
+  target_field: string;
+  mapping?: string;
+}
+
 export interface Field {
   name: string;
   datatype: string;
@@ -66,6 +74,43 @@ export interface Mapping {
   attributes: MappingAttributes;
 }
 
+export interface LineageNode {
+  id: string;
+  name: string;
+  type: string;
+  mapping: string;
+}
+
+export interface FieldPair {
+  from_field: string;
+  to_field: string;
+}
+
+export interface LineageEdge {
+  id: string;
+  source: string;
+  target: string;
+  mapping: string;
+  fields: FieldPair[];
+}
+
+export interface LineageData {
+  nodes: LineageNode[];
+  edges: LineageEdge[];
+}
+
+export interface LineageHop {
+  instance: string;
+  port: string;
+  type: string;
+  expression: string;
+}
+
+export interface TraceResponse {
+  mapping: string;
+  hops: LineageHop[];
+}
+
 export type ParseResponseExecutionOrder = {[key: string]: string[]};
 
 export interface ParseResponse {
@@ -73,6 +118,7 @@ export interface ParseResponse {
   targets: Target[];
   mappings: Mapping[];
   execution_order: ParseResponseExecutionOrder;
+  lineage: LineageData;
 }
 
 export interface XmlUploadInput {
