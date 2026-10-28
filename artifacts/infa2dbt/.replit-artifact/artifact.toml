@@ -17,7 +17,7 @@ run = "pnpm --filter @workspace/infa2dbt run dev"
 [services.production]
 build = [ "pnpm", "--filter", "@workspace/infa2dbt", "run", "build" ]
 [services.production.run]
-args = ["python", "api/serve.py"]
+args = ["python", "artifacts/infa2dbt/api/serve.py"]
 
 [services.production.run.env]
 PORT = "24518"

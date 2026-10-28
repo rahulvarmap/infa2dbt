@@ -22,7 +22,7 @@ NODE_ENV = "production"
 
 [services.production.run]
 # we don't run through pnpm to make startup faster in production
-args = ["python", "../infa2dbt/api/serve.py"]
+args = ["python", "artifacts/infa2dbt/api/serve.py"]
 
 [services.production.run.env]
 PORT = "8080"
