@@ -5,8 +5,9 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useTraceLineage } from '@workspace/api-client-react';
-import type { Mapping, ParseResponse, TraceResponse } from '@workspace/api-client-react';
-import { AlertCircle, GitBranch, LoaderCircle, Route as RouteIcon, X } from 'lucide-react';
+import type { Mapping, ParseResponse } from '@workspace/api-client-react';
+import { GitBranch, Route as RouteIcon, X } from 'lucide-react';
+import { FieldTrace, type TraceState } from './field-trace';
 import { KINDS, NODE_W, NODE_H, errorText, kindLabel, kindOf, layoutGraph, resolvePorts, type Kind, type ParsedSource } from './lineage-utils';
 
 type NodeData = { name: string; type: string; kind: Kind; state: 'idle' | 'selected' | 'trace' | 'dim' };
@@ -23,12 +24,6 @@ function InstanceNode({ data, id }: NodeProps<Node<NodeData>>) {
 }
 
 const nodeTypes = { instance: InstanceNode };
-
-type TraceState =
-  | { status: 'idle' }
-  | { status: 'loading'; field: string }
-  | { status: 'error'; field: string; message: string }
-  | { status: 'done'; field: string; result: TraceResponse };
 
 export function LineageView({ data, mapping, source }: { data: ParseResponse; mapping: Mapping; source: ParsedSource | null }) {
   return <ReactFlowProvider><LineageInner data={data} mapping={mapping} source={source} /></ReactFlowProvider>;
@@ -52,10 +47,13 @@ function LineageInner({ data, mapping, source }: { data: ParseResponse; mapping:
   const [trace, setTrace] = useState<TraceState>({ status: 'idle' });
   const reqId = useRef(0);
   const traceMut = useTraceLineage();
-  const mutateRef = useRef(traceMut.mutateAsync);
-  mutateRef.current = traceMut.mutateAsync;
-
-  useEffect(() => { reqId.current++; setSelectedId(null); setTrace({ status: 'idle' }); }, [data, mappingKey, source]);
+  const sourceIdentity = source?.kind === 'file' ? source.file : source?.name;
+  useEffect(() => {
+    reqId.current++;
+    setSelectedId(null);
+    setTrace({ status: 'idle' });
+    return () => { reqId.current++; };
+  }, [data, mappingKey, sourceIdentity]);
 
   const selected = lnodes.find((n) => n.id === selectedId) ?? null;
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -114,14 +112,18 @@ function LineageInner({ data, mapping, source }: { data: ParseResponse; mapping:
   }), [ledges, nameById, hopPorts]);
 
   async function runTrace(field: string) {
-    if (!selected || !source) return;
+    if (!selected) return;
     const id = ++reqId.current;
+    if (!source) {
+      setTrace({ status: 'error', field, message: 'Load a sample or upload the XML again before tracing this column.' });
+      return;
+    }
     setTrace({ status: 'loading', field });
     try {
       const payload = source.kind === 'file'
         ? { target_instance: selected.name, target_field: field, mapping: mappingKey, file: source.file }
         : { target_instance: selected.name, target_field: field, mapping: mappingKey, sample_name: source.name };
-      const result = await mutateRef.current({ data: payload });
+      const result = await traceMut.mutateAsync({ data: payload });
       if (id === reqId.current) setTrace({ status: 'done', field, result });
     } catch (err) {
       if (id === reqId.current) setTrace({ status: 'error', field, message: errorText(err) });
@@ -132,6 +134,12 @@ function LineageInner({ data, mapping, source }: { data: ParseResponse; mapping:
     reqId.current++;
     setSelectedId(id);
     setTrace({ status: 'idle' });
+  }
+
+  function clearTrace() {
+    reqId.current++;
+    setTrace({ status: 'idle' });
+    traceMut.reset();
   }
 
   if (lnodes.length === 0) {
@@ -185,7 +193,7 @@ function LineageInner({ data, mapping, source }: { data: ParseResponse; mapping:
           </div>
 
           {selectedKind === 'target' && (
-            <p className="lg-hint"><RouteIcon size={13} /> Select a field to trace it back to its sources.</p>
+            <p className="lg-hint"><RouteIcon size={13} /> Select a column to trace it back to its sources.</p>
           )}
           {ports.fromConnectors && <p className="lg-hint">Definition not found; ports inferred from connectors.</p>}
 
@@ -195,7 +203,7 @@ function LineageInner({ data, mapping, source }: { data: ParseResponse; mapping:
                 const body = (
                   <>
                     <span className="lg-port-name">{p.name}</span>
-                    <span className="lg-port-meta">{[p.porttype, p.datatype].filter(Boolean).join(' · ')}</span>
+                    <span className="lg-port-meta">{[selectedKind === 'target' ? 'column' : p.porttype, p.datatype].filter(Boolean).join(' · ')}</span>
                     {p.expression && <code className="lg-expr">{p.expression}</code>}
                   </>
                 );
@@ -205,55 +213,22 @@ function LineageInner({ data, mapping, source }: { data: ParseResponse; mapping:
                       type="button"
                       className="lg-port lg-port-btn"
                       data-active={tracedField === p.name}
-                      onClick={() => { void runTrace(p.name); }}
-                      disabled={!source}
+                      aria-expanded={tracedField === p.name}
+                      aria-controls={tracedField === p.name ? 'lineage-field-trace' : undefined}
+                      onClick={(event) => { event.stopPropagation(); void runTrace(p.name); }}
                       data-testid={`button-trace-field-${p.name}`}
                     >
                       {body}
                     </button>
+                    {trace.status !== 'idle' && trace.field === p.name && (
+                      <FieldTrace trace={trace} onClear={clearTrace} onRetry={() => { void runTrace(p.name); }} />
+                    )}
                   </li>
                 ) : <li key={`${p.name}-${i}`} className="lg-port" data-testid={`row-node-port-${p.name}`}>{body}</li>;
               })}
             </ul>
           )}
 
-          {selectedKind === 'target' && trace.status !== 'idle' && (
-            <section className="lg-trace" aria-live="polite" data-testid="panel-trace">
-              <h5 className="sub-head">Upstream of {trace.field}</h5>
-              {trace.status === 'loading' && (
-                <div data-testid="status-trace-loading"><p className="lg-hint"><LoaderCircle size={13} className="animate-spin" /> Tracing lineage…</p><div className="sample-skeleton" /><div className="sample-skeleton" /></div>
-              )}
-              {trace.status === 'error' && (
-                <div className="error-message" role="alert" data-testid="error-trace">
-                  <AlertCircle size={16} className="mt-0.5 shrink-0" />
-                  <span>{trace.message}</span>
-                  <button type="button" className="ml-auto shrink-0 font-semibold underline" onClick={() => { void runTrace(trace.field); }} data-testid="button-retry-trace">Retry</button>
-                </div>
-              )}
-              {trace.status === 'done' && (trace.result.hops.length === 0 ? (
-                <p className="drop-caption" data-testid="status-trace-empty">No upstream hops found for this field.</p>
-              ) : (
-                <>
-                  <p className="lg-hint">{trace.result.hops.length} hops, listed depth-first from target. Branches are listed in sequence; adjacent rows across branches are not necessarily connected.</p>
-                  <ol className="lg-hops" data-testid="list-trace-hops">
-                    {trace.result.hops.map((h, i) => {
-                      const k = kindOf(h.type);
-                      return (
-                        <li key={`${h.instance}-${h.port}-${i}`} data-testid={`row-hop-${i}`}>
-                          <span className="lg-hop-n">{String(i + 1).padStart(2, '0')}</span>
-                          <div style={{ minWidth: 0 }}>
-                            <p className="lg-hop-main"><i className="lg-dot" data-kind={k} /><span>{h.instance}</span><b>.{h.port}</b></p>
-                            <p className="lg-port-meta">{h.type}</p>
-                            {h.expression && <code className="lg-expr">{h.expression}</code>}
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ol>
-                </>
-              ))}
-            </section>
-          )}
         </aside>
       )}
     </div>
