@@ -99,7 +99,7 @@ export const ParseXmlResponse = zod.object({
 
 export const ListSamplesResponseItem = zod.object({
   "filename": zod.string(),
-  "size_bytes": zod.number().int()
+  "size_bytes": zod.int()
 })
 export const ListSamplesResponse = zod.array(ListSamplesResponseItem)
 
@@ -220,7 +220,7 @@ export const UploadXmlBody = zod.object({
 
 export const UploadXmlResponse = zod.object({
   "filename": zod.string(),
-  "size_bytes": zod.number().int()
+  "size_bytes": zod.int()
 })
 
 
