@@ -32,7 +32,7 @@ CAPABILITY_REGISTRY: dict[str, TransformationCapability] = {
     "target definition": TransformationCapability("supported"),
     "source qualifier": _partial(
         "PARTIAL_SOURCE_QUALIFIER",
-        "Source-query behavior such as SQL overrides and source filters is not evaluated.",
+        "Source-query behavior such as SQL overrides and user-defined joins is not represented in lineage.",
     ),
     "expression": _partial(
         "PARTIAL_EXPRESSION_LINEAGE",

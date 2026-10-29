@@ -1,8 +1,18 @@
 """Snowflake-specific expression and datatype translation."""
 
 from decimal import Decimal
+from typing import Callable
 
-from api.parser.expressions import BinaryOperator, FunctionCall, Literal, UnaryOperator
+from api.parser.expressions import (
+    BinaryOperator,
+    Expression,
+    FunctionCall,
+    ListExpression,
+    Literal,
+    PortReference,
+    UnaryOperator,
+)
+from api.parser.identifiers import normalize_identifier
 
 
 class UnsupportedSnowflakeType(ValueError):
@@ -43,7 +53,8 @@ def render_unary(operator: str, operand: str) -> str:
 def render_binary(operator: str, left: str, right: str) -> str:
     if operator not in {
         "+", "-", "*", "/", "||", "=", "!=", "<>", "<", "<=", ">", ">=",
-        "AND", "OR", "IS NULL", "IS NOT NULL",
+        "AND", "OR", "IS NULL", "IS NOT NULL", "IN", "NOT IN", "LIKE",
+        "NOT LIKE",
     }:
         raise ValueError(f"Unsupported binary operator: {operator}.")
     if operator in {"IS NULL", "IS NOT NULL"}:
@@ -84,8 +95,124 @@ def render_function(function: FunctionCall, arguments: list[str]) -> str:
     if name == "TO_CHAR":
         _require_arity(name, count, {1, 2})
         return f"TO_VARCHAR({', '.join(arguments)})"
+    if name == "DATE_DIFF":
+        _require_arity(name, count, {3})
+        unit_argument = function.arguments[2]
+        if not isinstance(unit_argument, Literal) or unit_argument.kind != "string":
+            raise UnsupportedSnowflakeFunction(
+                "DATE_DIFF requires a supported string-literal date unit."
+            )
+        unit = _DATE_DIFF_UNITS.get(str(unit_argument.value).upper())
+        if unit is None:
+            raise UnsupportedSnowflakeFunction(
+                f"DATE_DIFF unit '{unit_argument.value}' has no Snowflake translation."
+            )
+        # PowerCenter DATE_DIFF returns date1 minus date2; Snowflake DATEDIFF
+        # returns expr2 minus expr1, so reverse the date arguments.
+        return f"DATEDIFF({unit}, {arguments[1]}, {arguments[0]})"
+    if name == "TRUNC":
+        if count == 1:
+            argument = function.arguments[0]
+            if isinstance(argument, FunctionCall):
+                argument_name = normalize_identifier(argument.name)
+                if argument_name == "sysdate":
+                    return f"DATE_TRUNC('DAY', {arguments[0]})"
+                if argument_name == "date_diff":
+                    return f"TRUNC({arguments[0]})"
+            raise UnsupportedSnowflakeFunction(
+                "TRUNC requires a recognized date or numeric expression."
+            )
+        if count == 2:
+            second = function.arguments[1]
+            if isinstance(second, Literal) and second.kind == "string":
+                date_part = _TRUNC_DATE_PARTS.get(str(second.value).upper())
+                if date_part is None:
+                    raise UnsupportedSnowflakeFunction(
+                        f"TRUNC date format '{second.value}' has no Snowflake translation."
+                    )
+                return f"DATE_TRUNC('{date_part}', {arguments[0]})"
+            if isinstance(second, Literal) and second.kind == "number":
+                return f"TRUNC({arguments[0]}, {arguments[1]})"
+        raise UnsupportedSnowflakeFunction(
+            "TRUNC requires one recognized expression or a supported second argument."
+        )
     raise UnsupportedSnowflakeFunction(
         f"Function '{function.name}' has no Snowflake translation."
+    )
+
+
+_DATE_DIFF_UNITS = {
+    "Y": "year",
+    "YY": "year",
+    "YYY": "year",
+    "YYYY": "year",
+    "RR": "year",
+    "MM": "month",
+    "MON": "month",
+    "MONTH": "month",
+    "D": "day",
+    "DD": "day",
+    "DDD": "day",
+    "DAY": "day",
+    "DY": "day",
+    "J": "day",
+    "HH": "hour",
+    "HH12": "hour",
+    "HH24": "hour",
+    "MI": "minute",
+    "SS": "second",
+    "SSSS": "second",
+    "MS": "millisecond",
+}
+
+_TRUNC_DATE_PARTS = {
+    "Y": "YEAR",
+    "YY": "YEAR",
+    "YYY": "YEAR",
+    "YYYY": "YEAR",
+    "MM": "MONTH",
+    "MON": "MONTH",
+    "MONTH": "MONTH",
+    "D": "DAY",
+    "DD": "DAY",
+    "DDD": "DAY",
+    "DAY": "DAY",
+    "DY": "DAY",
+    "HH": "HOUR",
+    "HH12": "HOUR",
+    "HH24": "HOUR",
+    "MI": "MINUTE",
+    "SS": "SECOND",
+}
+
+
+def render_predicate(
+    expression: Expression,
+    resolve_column: Callable[[PortReference], str],
+) -> str:
+    """Render a validated predicate AST using Snowflake SQL syntax."""
+    if isinstance(expression, Literal):
+        return render_literal(expression)
+    if isinstance(expression, PortReference):
+        return resolve_column(expression)
+    if isinstance(expression, UnaryOperator):
+        return render_unary(
+            expression.operator,
+            render_predicate(expression.operand, resolve_column),
+        )
+    if isinstance(expression, BinaryOperator):
+        return render_binary(
+            expression.operator,
+            render_predicate(expression.left, resolve_column),
+            render_predicate(expression.right, resolve_column),
+        )
+    if isinstance(expression, ListExpression):
+        values = ", ".join(
+            render_predicate(item, resolve_column) for item in expression.values
+        )
+        return f"({values})"
+    raise ValueError(
+        f"Unsupported predicate AST node: {type(expression).__name__}."
     )
 
 

@@ -18,10 +18,12 @@ from api.parser.expressions import (
     Expression,
     ExpressionSyntaxError,
     FunctionCall,
+    ListExpression,
     Literal,
     PortReference,
     UnaryOperator,
     VariablePortReference,
+    iter_port_references,
     parse_expression,
 )
 from api.parser.identifiers import normalize_identifier, normalize_type_name
@@ -45,9 +47,11 @@ from .dialects.snowflake import (
     render_binary,
     render_function,
     render_literal,
+    render_predicate,
     render_unary,
     snowflake_type,
 )
+from .predicates import parse_simple_predicate
 
 
 DBT_CORE_VERSION = "1.12.6"
@@ -84,6 +88,15 @@ class _Block:
     message: str
     instance: str | None = None
     field: str | None = None
+
+
+@dataclass(frozen=True)
+class _SourceFilterSpec:
+    expression: Expression
+    source_text: str
+    mapping: str
+    instance: str
+    source_identity: str
 
 
 class _GenerationBlocked(Exception):
@@ -160,8 +173,6 @@ def _source_qualifier_blocks(transformation: Transformation) -> list[_Block]:
         "sql query": ("SOURCE_QUALIFIER_SQL_OVERRIDE", "SQL override"),
         "sql override": ("SOURCE_QUALIFIER_SQL_OVERRIDE", "SQL override"),
         "sql query override": ("SOURCE_QUALIFIER_SQL_OVERRIDE", "SQL override"),
-        "source filter": ("SOURCE_QUALIFIER_SOURCE_FILTER", "source filter"),
-        "source filter condition": ("SOURCE_QUALIFIER_SOURCE_FILTER", "source filter"),
         "user defined join": ("SOURCE_QUALIFIER_USER_DEFINED_JOIN", "user-defined join"),
     }
     blocks = []
@@ -202,6 +213,11 @@ def _render_expression(
             _render_expression(expression.left, resolve_port),
             _render_expression(expression.right, resolve_port),
         )
+    if isinstance(expression, ListExpression):
+        values = ", ".join(
+            _render_expression(item, resolve_port) for item in expression.values
+        )
+        return f"({values})"
     if isinstance(expression, FunctionCall):
         arguments = [
             _render_expression(argument, resolve_port)
@@ -228,6 +244,161 @@ class _ProjectBuilder:
             self.mapping_diagnostics[diagnostic["mapping"]].append(diagnostic)
         self.source_info = self._index_sources()
         self.source_blockers: dict[str, list[str]] = {}
+        self.source_filter_blocks: dict[str, list[_Block]] = defaultdict(list)
+        self.source_filters = self._index_source_filters()
+
+    def _record_source_filter_block(
+        self,
+        mapping_key: str,
+        instance_name: str,
+        code: str,
+        message: str,
+    ) -> _Block:
+        block = _Block(code, message, instance_name, "Source Filter")
+        self.source_filter_blocks[mapping_key].append(block)
+        self._add_diagnostic(
+            code,
+            message,
+            mapping=mapping_key,
+            instance=instance_name,
+            field_name="Source Filter",
+        )
+        return block
+
+    def _source_filter_column(self, source: Source, reference: PortReference) -> str:
+        parts = reference.name.split(".")
+        column_name = parts[-1]
+        if (
+            len(parts) > 1
+            and normalize_identifier(parts[-2]) != normalize_identifier(source.name)
+        ):
+            raise ValueError(
+                f"Source filter column '{reference.name}' is qualified by an "
+                f"unknown source; expected '{source.name}'."
+            )
+        field = next(
+            (
+                item for item in source.fields
+                if normalize_identifier(item.name) == normalize_identifier(column_name)
+            ),
+            None,
+        )
+        if field is None:
+            raise ValueError(
+                f"Source filter references unknown column '{reference.name}' "
+                f"on source '{source.name}'."
+            )
+        return f"src.{quote_identifier(field.name)}"
+
+    def _index_source_filters(self) -> dict[str, list[_SourceFilterSpec]]:
+        filters: dict[str, list[_SourceFilterSpec]] = defaultdict(list)
+        for mapping in self.result.mappings:
+            mapping_key = self.mapping_ids[id(mapping)]
+            instances = {
+                normalize_identifier(item.name): item for item in mapping.instances
+            }
+            sources = {
+                normalize_identifier(item.name): item for item in mapping.sources
+            }
+            transformations = {
+                normalize_identifier(item.name): item
+                for item in mapping.transformations
+            }
+            for instance in mapping.instances:
+                transformation = transformations.get(_definition_name(instance))
+                if (
+                    transformation is None
+                    or normalize_type_name(transformation.type) != "source qualifier"
+                ):
+                    continue
+                filter_values = [
+                    value.strip()
+                    for name, value in sorted(transformation.attributes.items())
+                    if _attribute_key(name) in {
+                        "source filter",
+                        "source filter condition",
+                    }
+                    and value.strip()
+                ]
+                if not filter_values:
+                    continue
+                if len(set(filter_values)) > 1:
+                    self._record_source_filter_block(
+                        mapping_key,
+                        instance.name,
+                        "SOURCE_QUALIFIER_SOURCE_FILTER_CONFLICT",
+                        f"Source Qualifier '{instance.name}' declares conflicting source filters.",
+                    )
+                    continue
+                source_text = filter_values[0]
+                try:
+                    expression = parse_simple_predicate(source_text)
+                except ExpressionSyntaxError as error:
+                    self._record_source_filter_block(
+                        mapping_key,
+                        instance.name,
+                        "SOURCE_QUALIFIER_SOURCE_FILTER_PARSE",
+                        f"Source Qualifier '{instance.name}' has an unsupported source filter: {error}",
+                    )
+                    continue
+
+                source_instances = {
+                    normalize_identifier(connector.from_instance)
+                    for connector in mapping.connectors
+                    if normalize_identifier(connector.to_instance)
+                    == normalize_identifier(instance.name)
+                    and normalize_identifier(connector.from_instance) in instances
+                    and _is_source(instances[normalize_identifier(connector.from_instance)])
+                }
+                source_definitions = {
+                    _source_identity(definition): definition
+                    for instance_key in source_instances
+                    if (
+                        definition := sources.get(
+                            _definition_name(instances[instance_key])
+                        )
+                    ) is not None
+                }
+                if len(source_definitions) != 1:
+                    self._record_source_filter_block(
+                        mapping_key,
+                        instance.name,
+                        "SOURCE_QUALIFIER_SOURCE_FILTER_SOURCE",
+                        f"Source Qualifier '{instance.name}' source filter must resolve to exactly one source.",
+                    )
+                    continue
+                source_identity, source = next(iter(source_definitions.items()))
+                try:
+                    for reference in iter_port_references(expression):
+                        self._source_filter_column(source, reference)
+                except ValueError as error:
+                    self._record_source_filter_block(
+                        mapping_key,
+                        instance.name,
+                        "SOURCE_QUALIFIER_SOURCE_FILTER_COLUMN",
+                        str(error),
+                    )
+                    continue
+                filters[source_identity].append(_SourceFilterSpec(
+                    expression=expression,
+                    source_text=source_text,
+                    mapping=mapping_key,
+                    instance=instance.name,
+                    source_identity=source_identity,
+                ))
+
+        for source_identity, specs in list(filters.items()):
+            distinct_filters = {item.source_text for item in specs}
+            if len(distinct_filters) > 1:
+                for spec in specs:
+                    self._record_source_filter_block(
+                        spec.mapping,
+                        spec.instance,
+                        "SOURCE_QUALIFIER_SOURCE_FILTER_CONFLICT",
+                        f"Source '{source_identity}' has different filters across mappings; one shared staging model cannot represent both.",
+                    )
+                del filters[source_identity]
+        return dict(filters)
 
     def _index_sources(self) -> dict[str, _SourceInfo]:
         sources = {}
@@ -368,12 +539,23 @@ class _ProjectBuilder:
                 )
             else:
                 columns = ",\n".join(projections)
-                self.files[path] = (
+                filter_sql = ""
+                filter_specs = self.source_filters.get(identity, [])
+                if filter_specs:
+                    spec = filter_specs[0]
+                    filter_sql = render_predicate(
+                        spec.expression,
+                        lambda reference: self._source_filter_column(source, reference),
+                    )
+                sql = (
                     f"{{{{ config(materialized='view') }}}}\n\n"
                     "select\n"
                     f"{columns}\n"
                     f"from {{{{ source({_jinja_string(info.group_name)}, {_jinja_string(source.name)}) }}}} as src\n"
                 )
+                if filter_sql:
+                    sql += f"where {filter_sql}\n"
+                self.files[path] = sql
 
     def _source_yml(self) -> str:
         groups: dict[str, list[_SourceInfo]] = defaultdict(list)
@@ -540,6 +722,23 @@ class _ProjectBuilder:
             item for item in self.mapping_diagnostics.get(mapping_key, [])
             if item["severity"] == "error"
         ]
+        source_filter_blocks = self.source_filter_blocks.get(mapping_key, [])
+        if source_filter_blocks:
+            remaining_errors = [
+                item for item in mapping_errors
+                if not any(
+                    item["code"] == block.code and item["message"] == block.message
+                    for block in source_filter_blocks
+                )
+            ]
+            blocks = list(source_filter_blocks)
+            if remaining_errors:
+                blocks.append(_Block(
+                    "INVALID_MAPPING",
+                    f"Mapping '{mapping_key}' has validation errors; its target model is blocked.",
+                    target_instance.name,
+                ))
+            raise _GenerationBlocked(blocks)
         if mapping_errors:
             raise _GenerationBlocked(_Block(
                 "INVALID_MAPPING",

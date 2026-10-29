@@ -18,7 +18,7 @@ from api.dbt.dialects.snowflake import (
     snowflake_type,
 )
 from api.parser import parse_powercenter_xml
-from api.parser.expressions import FunctionCall
+from api.parser.expressions import FunctionCall, Literal, PortReference
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -101,7 +101,6 @@ def test_supported_subset_compiles_expression_ast_and_emits_dbt_refs():
 
 @pytest.mark.parametrize(("attribute", "value", "code"), [
     ("SQL Query", "select A from S", "SOURCE_QUALIFIER_SQL_OVERRIDE"),
-    ("Source Filter", "A IS NOT NULL", "SOURCE_QUALIFIER_SOURCE_FILTER"),
     ("User Defined Join", "S.A = X.A", "SOURCE_QUALIFIER_USER_DEFINED_JOIN"),
 ])
 def test_source_qualifier_unsupported_features_block_target(
@@ -114,6 +113,37 @@ def test_source_qualifier_unsupported_features_block_target(
     assert model.startswith("-- BLOCKED MODEL: t")
     assert any(item["code"] == code for item in project.diagnostics)
     assert project.blocked_models[0]["reasons"] == [code]
+
+
+def test_source_qualifier_source_filter_is_translated_in_staging_model():
+    project = _project(_with_source_qualifier_attribute(
+        "Source Filter",
+        "S.A IN ('x', 'y') AND B NOT LIKE 'z%'",
+    ))
+    staging = project.files["models/staging/stg_s.sql"]
+
+    assert project.blocked_models == []
+    assert "where ((src.\"A\" IN ('x', 'y')) AND (src.\"B\" NOT LIKE 'z%'))" in staging
+    assert "{{ ref('stg_s') }}" in project.files["models/marts/t.sql"]
+
+
+@pytest.mark.parametrize(("value", "code"), [
+    ("A =", "SOURCE_QUALIFIER_SOURCE_FILTER_PARSE"),
+    ("UPPER(A) = 'X'", "SOURCE_QUALIFIER_SOURCE_FILTER_PARSE"),
+    ("UNKNOWN_COLUMN IS NULL", "SOURCE_QUALIFIER_SOURCE_FILTER_COLUMN"),
+])
+def test_invalid_source_qualifier_filter_blocks_target_with_diagnostic(value, code):
+    project = _project(_with_source_qualifier_attribute("Source Filter", value))
+
+    assert project.files["models/marts/t.sql"].startswith("-- BLOCKED MODEL: t")
+    assert project.blocked_models[0]["reasons"] == [code]
+    assert any(
+        item["code"] == code
+        and item["mapping"] == "M"
+        and item["instance"] == "SQ"
+        and item["field"] == "Source Filter"
+        for item in project.diagnostics
+    )
 
 
 def test_unknown_function_is_diagnostic_and_blocks_its_target():
@@ -159,6 +189,29 @@ def test_snowflake_function_translation_is_centralized_and_checks_arity():
     )
     with pytest.raises(ValueError, match="IIF requires"):
         render_function(FunctionCall("IIF", ()), ["only-one"])
+
+
+def test_sample_date_functions_have_centralized_snowflake_translations():
+    date_diff = FunctionCall(
+        "DATE_DIFF",
+        (
+            FunctionCall("SYSDATE", ()),
+            PortReference("DOB"),
+            Literal("string", "YYYY"),
+        ),
+    )
+    assert render_function(
+        date_diff,
+        ["CURRENT_TIMESTAMP()::TIMESTAMP_NTZ", '"dob"', "'YYYY'"],
+    ) == "DATEDIFF(year, \"dob\", CURRENT_TIMESTAMP()::TIMESTAMP_NTZ)"
+    assert render_function(
+        FunctionCall("TRUNC", (FunctionCall("SYSDATE", ()),)),
+        ["CURRENT_TIMESTAMP()::TIMESTAMP_NTZ"],
+    ) == "DATE_TRUNC('DAY', CURRENT_TIMESTAMP()::TIMESTAMP_NTZ)"
+    assert render_function(
+        FunctionCall("TRUNC", (date_diff,)),
+        ["DATEDIFF(year, \"dob\", CURRENT_TIMESTAMP()::TIMESTAMP_NTZ)"],
+    ) == "TRUNC(DATEDIFF(year, \"dob\", CURRENT_TIMESTAMP()::TIMESTAMP_NTZ))"
 
 
 def test_project_zip_is_byte_for_byte_deterministic():

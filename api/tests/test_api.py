@@ -152,7 +152,7 @@ def test_multi_mapping_graph_and_trace_disambiguation():
     assert source_fields == {"FIRST_NAME", "LAST_NAME"}
 
 
-def test_generate_dbt_project_from_sample_returns_partial_project_zip():
+def test_generate_dbt_project_from_sample_returns_generated_project_zip():
     response = request(
         "POST",
         "/api/dbt/project",
@@ -165,10 +165,12 @@ def test_generate_dbt_project_from_sample_returns_partial_project_zip():
         assert "models/schema.yml" in archive.namelist()
         assert "dbt_project.yml" in archive.namelist()
         diagnostics = json.loads(archive.read("diagnostics.json"))
-        assert diagnostics["blocked_models"][0]["name"] == "dim_member"
+        assert diagnostics["blocked_models"] == []
         target = archive.read("models/marts/dim_member.sql").decode()
-        assert target.startswith("-- BLOCKED MODEL: dim_member")
-        assert "SOURCE_QUALIFIER_SOURCE_FILTER" in target
+        assert not target.startswith("-- BLOCKED MODEL: dim_member")
+        assert "DATEDIFF(year," in target
+        staging = archive.read("models/staging/stg_member_enrollment.sql").decode()
+        assert 'where (src."STATUS_CD" IS NOT NULL)' in staging
 
 
 def test_generate_dbt_project_from_upload():

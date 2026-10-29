@@ -12,7 +12,7 @@ from .identifiers import normalize_identifier
 
 KNOWN_FUNCTIONS = frozenset({
     "iif", "decode", "isnull", "nvl", "ltrim", "rtrim", "substr",
-    "concat", "to_date", "to_char", "sysdate",
+    "concat", "to_date", "to_char", "sysdate", "date_diff", "trunc",
 })
 
 
@@ -55,9 +55,14 @@ class BinaryOperator:
     right: Expression
 
 
+@dataclass(frozen=True)
+class ListExpression:
+    values: tuple[Expression, ...]
+
+
 Expression: TypeAlias = (
     Literal | PortReference | VariablePortReference | FunctionCall
-    | UnaryOperator | BinaryOperator
+    | UnaryOperator | BinaryOperator | ListExpression
 )
 
 
@@ -72,7 +77,7 @@ _TOKEN_PATTERN = re.compile(
     r"(?P<space>\s+)"
     r"|(?P<string>'(?:''|[^'])*')"
     r"|(?P<number>(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
-    r"|(?P<identifier>(?:[^\W\d]|_|\$)[\w$]*)"
+    r"|(?P<identifier>(?:[^\W\d]|_|\$)[\w$]*(?:\.(?:[^\W\d]|_|\$)[\w$]*)*)"
     r"|(?P<operator>\|\||<=|>=|<>|!=|[()+\-*/=<>!,])",
     re.UNICODE,
 )
@@ -89,6 +94,10 @@ _PRECEDENCE = {
     ">=": 3,
     "IS NULL": 3,
     "IS NOT NULL": 3,
+    "IN": 3,
+    "NOT IN": 3,
+    "LIKE": 3,
+    "NOT LIKE": 3,
     "||": 4,
     "+": 5,
     "-": 5,
@@ -165,8 +174,26 @@ class _Parser:
                     self._advance()  # NOT
                 self._advance()  # NULL
                 right = Literal("null", None)
+            elif operator in {"IN", "NOT IN"}:
+                self._advance()
+                if operator == "NOT IN":
+                    self._advance()
+                self._expect("(")
+                values = []
+                if self.current.kind == "operator" and self.current.value == ")":
+                    raise ExpressionSyntaxError("IN requires at least one value.")
+                while True:
+                    values.append(self._parse_binary(0))
+                    if self.current.kind == "operator" and self.current.value == ",":
+                        self._advance()
+                        continue
+                    self._expect(")")
+                    break
+                right = ListExpression(tuple(values))
             else:
                 self._advance()
+                if operator == "NOT LIKE":
+                    self._advance()
                 right = self._parse_binary(precedence + 1)
             left = BinaryOperator(operator, left, right)
         return left
@@ -180,6 +207,14 @@ class _Parser:
         keyword = token.value.upper()
         if keyword in {"AND", "OR"}:
             return keyword
+        if keyword in {"IN", "LIKE"}:
+            return keyword
+        if (
+            keyword == "NOT"
+            and self.tokens[self.index + 1].kind == "identifier"
+            and self.tokens[self.index + 1].value.upper() in {"IN", "LIKE"}
+        ):
+            return f"NOT {self.tokens[self.index + 1].value.upper()}"
         if keyword == "IS":
             next_token = self.tokens[self.index + 1]
             if next_token.kind == "identifier" and next_token.value.upper() == "NULL":
@@ -265,6 +300,9 @@ def iter_port_references(expression: Expression) -> Iterator[PortReference]:
     elif isinstance(expression, BinaryOperator):
         yield from iter_port_references(expression.left)
         yield from iter_port_references(expression.right)
+    elif isinstance(expression, ListExpression):
+        for value in expression.values:
+            yield from iter_port_references(value)
     elif isinstance(expression, FunctionCall):
         for argument in expression.arguments:
             yield from iter_port_references(argument)
@@ -280,6 +318,9 @@ def iter_function_calls(expression: Expression) -> Iterator[FunctionCall]:
     elif isinstance(expression, BinaryOperator):
         yield from iter_function_calls(expression.left)
         yield from iter_function_calls(expression.right)
+    elif isinstance(expression, ListExpression):
+        for value in expression.values:
+            yield from iter_function_calls(value)
 
 
 def unknown_function_calls(expression: Expression) -> Iterator[FunctionCall]:
