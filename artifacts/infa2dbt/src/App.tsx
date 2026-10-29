@@ -10,6 +10,7 @@ import {
 } from '@workspace/api-client-react';
 import type { ParseResponse } from '@workspace/api-client-react';
 import { ParseInspector } from '@/components/parse-inspector';
+import type { DbtDialect } from '@/components/dbt-project-files';
 import type { ParsedSource } from '@/components/lineage/lineage-utils';
 import {
   AlertCircle,
@@ -80,6 +81,7 @@ function Home() {
   const [parsed, setParsed] = useState<ParseResponse | null>(null);
   const [parsedLabel, setParsedLabel] = useState('');
   const [parsedSource, setParsedSource] = useState<ParsedSource | null>(null);
+  const [dbtDialect, setDbtDialect] = useState<DbtDialect>('snowflake');
   const [activeSample, setActiveSample] = useState<string | null>(null);
   const [generatingProject, setGeneratingProject] = useState(false);
   const [generationError, setGenerationError] = useState('');
@@ -208,6 +210,7 @@ function Home() {
     } else {
       form.append('sample_name', parsedSource.name);
     }
+    form.append('dialect', dbtDialect);
     try {
       const response = await fetch('/api/dbt/project', {
         method: 'POST',
@@ -224,7 +227,7 @@ function Home() {
       const url = URL.createObjectURL(archive);
       const link = document.createElement('a');
       link.href = url;
-      link.download = 'infa2dbt_snowflake.zip';
+      link.download = `infa2dbt_${dbtDialect}.zip`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -602,7 +605,14 @@ function Home() {
                     )}
                   </section>
                 )}
-                <ParseInspector key={parsedLabel + String(parsed.mappings.length)} data={parsed} label={parsedLabel} source={parsedSource} />
+                <ParseInspector
+                  key={parsedLabel + String(parsed.mappings.length)}
+                  data={parsed}
+                  label={parsedLabel}
+                  source={parsedSource}
+                  dialect={dbtDialect}
+                  onDialectChange={setDbtDialect}
+                />
               </>
             ) : (
               <div className="inspector" data-testid="status-parsing"><div className="sample-skeleton" /><div className="sample-skeleton" /><div className="sample-skeleton" /></div>

@@ -173,6 +173,19 @@ def test_generate_dbt_project_from_sample_returns_generated_project_zip():
         assert "where" not in staging.lower()
         assert "where (__in.status_cd IS NOT NULL)" in target
 
+        preview = request(
+            "POST",
+            "/api/dbt/project/files",
+            data={"sample_name": SAMPLE.name, "dialect": "snowflake"},
+        )
+        assert preview.status_code == 200
+        preview_payload = preview.json()
+        assert preview_payload["dialect"] == "snowflake"
+        assert preview_payload["files"] == {
+            path: archive.read(path).decode("utf-8")
+            for path in archive.namelist()
+        }
+
 
 def test_generate_dbt_project_from_upload():
     response = request(
@@ -185,3 +198,20 @@ def test_generate_dbt_project_from_upload():
         assert "models/staging/stg_member_enrollment.sql" in archive.namelist()
         assert "requirements.txt" in archive.namelist()
         assert "dbt-core==1.12.6" in archive.read("requirements.txt").decode()
+
+
+def test_duckdb_project_preview_matches_the_download_zip():
+    request_data = {"sample_name": SAMPLE.name, "dialect": "duckdb"}
+    downloaded = request("POST", "/api/dbt/project", data=request_data)
+    preview = request("POST", "/api/dbt/project/files", data=request_data)
+
+    assert downloaded.status_code == 200
+    assert "infa2dbt_duckdb.zip" in downloaded.headers["content-disposition"]
+    assert preview.status_code == 200
+    preview_payload = preview.json()
+    assert preview_payload["dialect"] == "duckdb"
+    with zipfile.ZipFile(BytesIO(downloaded.content)) as archive:
+        assert preview_payload["files"] == {
+            path: archive.read(path).decode("utf-8")
+            for path in archive.namelist()
+        }

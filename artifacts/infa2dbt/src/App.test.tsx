@@ -38,7 +38,20 @@ vi.mock('@workspace/api-client-react', () => ({
 }));
 
 vi.mock('@/components/parse-inspector', () => ({
-  ParseInspector: ({ label }: { label: string }) => <div data-testid="parse-inspector">{label}</div>,
+  ParseInspector: ({
+    label,
+    onDialectChange,
+  }: {
+    label: string;
+    onDialectChange?: (dialect: 'duckdb') => void;
+  }) => (
+    <div data-testid="parse-inspector">
+      {label}
+      <button type="button" data-testid="mock-select-duckdb" onClick={() => onDialectChange?.('duckdb')}>
+        Use DuckDB
+      </button>
+    </div>
+  ),
 }));
 
 import App from './App';
@@ -76,6 +89,35 @@ describe('dbt project download', () => {
     expect((options.body as FormData).get('sample_name')).toBe('sample.xml');
     await waitFor(() => expect(createObjectUrl).toHaveBeenCalledTimes(1));
     expect(anchorClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('downloads the ZIP for the dialect selected in the dbt SQL tab', async () => {
+    hooks.parseSample.mockResolvedValue({ mappings: [], diagnostics: [] });
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn(() => 'blob:duckdb-project'),
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/zip' },
+      blob: async () => new Blob(['duckdb-project']),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId('button-try-sample-sample.xml'));
+    await screen.findByTestId('button-download-dbt-project');
+    fireEvent.click(screen.getByTestId('mock-select-duckdb'));
+    fireEvent.click(screen.getByTestId('button-download-dbt-project'));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((options.body as FormData).get('dialect')).toBe('duckdb');
   });
 });
 

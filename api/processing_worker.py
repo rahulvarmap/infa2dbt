@@ -100,13 +100,24 @@ def process_xml_request(
             )
             return {"status_code": 200, "content": response.model_dump()}
 
-        if mode == "generate":
-            project = build_project(result)
+        if mode in {"generate", "generate_files"}:
+            dialect = fields.get("dialect", "snowflake")
+            project = build_project(result, dialect=dialect)
+            if mode == "generate_files":
+                return {
+                    "status_code": 200,
+                    "content": {
+                        "dialect": dialect,
+                        "files": project.files,
+                        "blocked_models": project.blocked_models,
+                        "diagnostics": project.diagnostics,
+                    },
+                }
             archive = zip_project(project.files)
             return {
                 "status_code": 200,
                 "content": {
-                    "filename": "infa2dbt_snowflake.zip",
+                    "filename": f"infa2dbt_{dialect}.zip",
                     "zip_base64": base64.b64encode(archive).decode("ascii"),
                     "blocked_models": project.blocked_models,
                     "diagnostics": project.diagnostics,

@@ -216,12 +216,12 @@ async def parse_sample(filename: str) -> JSONResponse:
     return await process_in_worker(contents)
 
 
-@app.post("/dbt/project")
-@app.post("/api/dbt/project")
-async def download_dbt_project(request: Request) -> Response:
+async def read_dbt_project_input(
+    request: Request,
+) -> tuple[bytes, dict[str, str]] | JSONResponse:
     upload = await read_xml_upload(
         request,
-        allowed_fields={"sample_name"},
+        allowed_fields={"sample_name", "dialect"},
         require_file=False,
     )
     if isinstance(upload, JSONResponse):
@@ -234,21 +234,37 @@ async def download_dbt_project(request: Request) -> Response:
             content={"error": "Provide exactly one XML file or sample_name."},
         )
     if file_contents is not None:
-        contents = file_contents
-    else:
-        assert sample_name is not None
-        path = sample_files().get(sample_name)
-        if path is None:
-            return JSONResponse(status_code=404, content={"error": "Sample not found."})
-        with path.open("rb") as sample:
-            contents = sample.read(MAX_FILE_SIZE + 1)
-        if len(contents) > MAX_FILE_SIZE:
-            return JSONResponse(
-                status_code=413,
-                content={"error": "Sample must be 5 MB or smaller."},
-            )
+        return file_contents, fields
 
-    result = await process_in_worker(contents, {"mode": "generate"})
+    assert sample_name is not None
+    path = sample_files().get(sample_name)
+    if path is None:
+        return JSONResponse(status_code=404, content={"error": "Sample not found."})
+    with path.open("rb") as sample:
+        contents = sample.read(MAX_FILE_SIZE + 1)
+    if len(contents) > MAX_FILE_SIZE:
+        return JSONResponse(
+            status_code=413,
+            content={"error": "Sample must be 5 MB or smaller."},
+        )
+    return contents, fields
+
+
+@app.post("/dbt/project")
+@app.post("/api/dbt/project")
+async def download_dbt_project(request: Request) -> Response:
+    project_input = await read_dbt_project_input(request)
+    if isinstance(project_input, JSONResponse):
+        return project_input
+    contents, fields = project_input
+
+    result = await process_in_worker(
+        contents,
+        {
+            "mode": "generate",
+            "dialect": fields.get("dialect", "snowflake"),
+        },
+    )
     if result.status_code != 200:
         return result
     try:
@@ -264,6 +280,22 @@ async def download_dbt_project(request: Request) -> Response:
         content=archive,
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/dbt/project/files")
+@app.post("/api/dbt/project/files")
+async def preview_dbt_project_files(request: Request) -> JSONResponse:
+    project_input = await read_dbt_project_input(request)
+    if isinstance(project_input, JSONResponse):
+        return project_input
+    contents, fields = project_input
+    return await process_in_worker(
+        contents,
+        {
+            "mode": "generate_files",
+            "dialect": fields.get("dialect", "snowflake"),
+        },
     )
 
 

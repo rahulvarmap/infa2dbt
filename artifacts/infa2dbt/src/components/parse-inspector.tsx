@@ -2,10 +2,23 @@ import { useMemo, useState } from 'react';
 import type { ParseResponse } from '@workspace/api-client-react';
 import { LineageView } from '@/components/lineage/lineage-view';
 import { normalizeIdentifier, orderKey, type ParsedSource } from '@/components/lineage/lineage-utils';
+import { DbtProjectFiles, type DbtDialect } from '@/components/dbt-project-files';
 
-type Tab = 'lineage' | 'summary' | 'ports' | 'raw';
+type Tab = 'lineage' | 'summary' | 'ports' | 'raw' | 'dbt-sql';
 
-export function ParseInspector({ data, label, source }: { data: ParseResponse; label: string; source: ParsedSource | null }) {
+export function ParseInspector({
+  data,
+  label,
+  source,
+  dialect,
+  onDialectChange,
+}: {
+  data: ParseResponse;
+  label: string;
+  source: ParsedSource | null;
+  dialect: DbtDialect;
+  onDialectChange: (dialect: DbtDialect) => void;
+}) {
   const [mapIdx, setMapIdx] = useState(0);
   const [tab, setTab] = useState<Tab>('lineage');
   const [tIdx, setTIdx] = useState(0);
@@ -32,8 +45,8 @@ export function ParseInspector({ data, label, source }: { data: ParseResponse; l
         )}
       </div>
       <div className="tabs" role="tablist" aria-label="Parsed mapping views">
-        {(['lineage', 'summary', 'ports', 'raw'] as Tab[]).map((t) => (
-          <button key={t} role="tab" type="button" aria-selected={tab === t} className="tab" data-active={tab === t} onClick={() => setTab(t)} data-testid={`tab-${t}`}>{t}</button>
+        {(['lineage', 'summary', 'ports', 'raw', 'dbt-sql'] as Tab[]).map((t) => (
+          <button key={t} role="tab" type="button" aria-selected={tab === t} className="tab" data-active={tab === t} onClick={() => setTab(t)} data-testid={`tab-${t}`}>{t === 'dbt-sql' ? 'dbt SQL' : t}</button>
         ))}
       </div>
       <section className="mapping-diagnostics" aria-labelledby="mapping-diagnostics-title" data-testid="panel-mapping-diagnostics">
@@ -60,7 +73,7 @@ export function ParseInspector({ data, label, source }: { data: ParseResponse; l
           <p className="diagnostics-empty">No diagnostics for this mapping.</p>
         )}
       </section>
-      {!mapping && tab !== 'raw' ? <p className="drop-caption">No mappings found in this file.</p> : null}
+      {!mapping && tab !== 'raw' && tab !== 'dbt-sql' ? <p className="drop-caption">No mappings found in this file.</p> : null}
       {mapping && tab === 'lineage' && (
         <div data-testid="panel-lineage"><LineageView data={data} mapping={mapping} source={source} /></div>
       )}
@@ -114,6 +127,13 @@ export function ParseInspector({ data, label, source }: { data: ParseResponse; l
           <button type="button" className="sample-button" onClick={() => setRawOpen((v) => !v)} data-testid="button-toggle-raw">{rawOpen ? 'Collapse' : 'Expand'} IR JSON</button>
           {rawOpen && <pre className="raw-json" data-testid="text-raw-json">{json}</pre>}
         </div>
+      )}
+      {tab === 'dbt-sql' && (
+        <DbtProjectFiles
+          source={source}
+          dialect={dialect}
+          onDialectChange={onDialectChange}
+        />
       )}
     </section>
   );

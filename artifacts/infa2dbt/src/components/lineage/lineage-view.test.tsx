@@ -95,7 +95,7 @@ function show(source: ParsedSource | null = sample) {
 
 function showInspector(inspectorData: ParseResponse) {
   const client = new QueryClient({ defaultOptions: { mutations: { retry: false }, queries: { retry: false } } });
-  render(<QueryClientProvider client={client}><ParseInspector data={inspectorData} label="sample.xml" source={sample} /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><ParseInspector data={inspectorData} label="sample.xml" source={sample} dialect="snowflake" onDialectChange={vi.fn()} /></QueryClientProvider>);
 }
 
 function traceBody() {
