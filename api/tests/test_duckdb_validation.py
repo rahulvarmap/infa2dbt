@@ -137,6 +137,16 @@ def test_all_bundled_samples_compile_run_and_match_golden_values(tmp_path: Path)
         ]
         assert all(model["status"] == "passed" for model in report["models"]), report
 
+        if sample_path.name == "m_claims_member_join.xml":
+            row_counts = {
+                model["name"]: model["row_count"] for model in report["models"]
+            }
+            assert row_counts == {
+                "fact_claim": 4,
+                "stg_claims": 6,
+                "stg_member": 6,
+            }
+            continue
         if sample_path.name != "m_member_enrollment.xml":
             continue
         target_path = next(
@@ -171,3 +181,140 @@ def test_all_bundled_samples_compile_run_and_match_golden_values(tmp_path: Path)
             ("SYN-003", 25.0, " NullFirst", "Male"),
             ("SYN-004", 25.0, " ", "Unknown"),
         ]
+
+
+@pytest.mark.parametrize(
+    ("join_type", "expected_count"),
+    [
+        ("Normal", 4),
+        ("Master Outer", 6),
+        ("Detail Outer", 7),
+        ("Full Outer", 9),
+    ],
+)
+def test_joiner_types_preserve_expected_rows_and_nulls(
+    join_type: str,
+    expected_count: int,
+    tmp_path: Path,
+) -> None:
+    sample_path = Path("samples/m_claims_member_join.xml")
+    xml = sample_path.read_bytes().replace(
+        b'NAME="Join Type" VALUE="Normal"',
+        f'NAME="Join Type" VALUE="{join_type}"'.encode(),
+    )
+    parsed = parse_powercenter_xml(xml)
+    snowflake_project = build_project(parsed)
+    expected_join_sql = {
+        "Normal": "INNER JOIN",
+        "Master Outer": "RIGHT OUTER JOIN",
+        "Detail Outer": "LEFT OUTER JOIN",
+        "Full Outer": "FULL OUTER JOIN",
+    }[join_type]
+    assert not snowflake_project.blocked_models
+    assert expected_join_sql in snowflake_project.files["models/marts/fact_claim.sql"]
+    project = prepare_validation_workspace(
+        parsed,
+        tmp_path / join_type.lower().replace(" ", "_"),
+    )
+    target_sql = project.files["models/marts/fact_claim.sql"].split("\n\n", 1)[1]
+    for seed in project.seed_tables:
+        stage_name = seed.identifier.removeprefix("seed_")
+        target_sql = target_sql.replace(
+            f"{{{{ ref('{stage_name}') }}}}",
+            f"main.{seed.identifier}",
+        )
+
+    connection = duckdb.connect(str(tmp_path / join_type.lower().replace(" ", "_") / "validation.duckdb"))
+    try:
+        rows = connection.execute(
+            "SELECT claim_id, member_id, claim_member_id, claim_amount, member_name "
+            f"FROM ({target_sql}) AS result "
+            "ORDER BY claim_id NULLS LAST, member_id NULLS LAST"
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert len(rows) == expected_count
+    if join_type == "Normal":
+        assert rows == [
+            ("C001", "M001", "M001", "100", "Ada"),
+            ("C002", "M002", "M002", "200", "Grace"),
+            ("C003", "M002", "M002", "75", "Grace"),
+            ("C004", "M004", "M004", "300", "Alan"),
+        ]
+    elif join_type == "Master Outer":
+        unmatched_claims = {row[0]: row for row in rows if row[0] in {"C005", "C006"}}
+        assert unmatched_claims["C005"] == ("C005", None, "M999", "400", None)
+        assert unmatched_claims["C006"] == ("C006", None, None, "500", None)
+    elif join_type == "Detail Outer":
+        unmatched_members = [row for row in rows if row[0] is None]
+        assert {row[1] for row in unmatched_members} == {"M003", "M005", None}
+        assert all(row[2] is None and row[3] is None for row in unmatched_members)
+    else:
+        assert any(row[0] == "C005" and row[1] is None for row in rows)
+        assert any(row[0] is None and row[1] == "M003" for row in rows)
+        assert any(
+            row[0] == "C005" and row[1] is None and row[2] == "M999"
+            and row[3] == "400" and row[4] is None
+            for row in rows
+        )
+        assert any(
+            row[0] is None and row[1] == "M003" and row[2] is None
+            and row[3] is None and row[4] == "Katherine"
+            for row in rows
+        )
+
+
+def test_joiner_supports_multiple_equality_conditions_and_blocks_non_equi(
+    tmp_path: Path,
+) -> None:
+    xml = Path("samples/m_claims_member_join.xml").read_bytes()
+    condition = b"MASTER.MEMBER_ID = DETAIL.CLAIM_MEMBER_ID"
+    multi_condition = (
+        b"MASTER.MEMBER_ID = DETAIL.CLAIM_MEMBER_ID AND "
+        b"MASTER.MEMBER_NAME = DETAIL.CLAIM_ID"
+    )
+    parsed_multiple = parse_powercenter_xml(xml.replace(condition, multi_condition))
+    project = prepare_validation_workspace(parsed_multiple, tmp_path / "multi_condition")
+    sql = project.files["models/marts/fact_claim.sql"]
+    assert not project.blocked_models
+    assert (
+        " on __master.member_id = __detail.member_id AND "
+        "__master.member_name = __detail.claim_id"
+    ) in sql
+    target_sql = sql.split("\n\n", 1)[1]
+    for seed in project.seed_tables:
+        stage_name = seed.identifier.removeprefix("seed_")
+        target_sql = target_sql.replace(
+            f"{{{{ ref('{stage_name}') }}}}",
+            f"main.{seed.identifier}",
+        )
+    connection = duckdb.connect(
+        str(tmp_path / "multi_condition" / "validation.duckdb")
+    )
+    try:
+        assert connection.execute(
+            f"SELECT * FROM ({target_sql}) AS result"
+        ).fetchall() == []
+    finally:
+        connection.close()
+
+    non_equi_xml = xml.replace(
+        condition,
+        b"MASTER.MEMBER_ID &lt; DETAIL.CLAIM_MEMBER_ID",
+    )
+    blocked = build_project(
+        parse_powercenter_xml(non_equi_xml),
+        dialect="snowflake",
+    )
+    fact_model = next(
+        model for model in blocked.blocked_models
+        if model["path"] == "models/marts/fact_claim.sql"
+    )
+    assert "NON_EQUI_JOIN_CONDITION" in fact_model["reasons"]
+    assert any(
+        diagnostic["code"] == "NON_EQUI_JOIN_CONDITION"
+        and diagnostic["mapping"] == "m_claims_member_join"
+        and diagnostic["instance"] == "JNR_CLAIM_MEMBER"
+        for diagnostic in blocked.diagnostics
+    )

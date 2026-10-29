@@ -24,6 +24,7 @@ class Target(Source):
 class Port(Field):
     porttype: str = ""
     expression: str = ""
+    group: str = ""
 
 
 class Transformation(BaseModel):

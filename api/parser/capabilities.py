@@ -42,7 +42,10 @@ CAPABILITY_REGISTRY: dict[str, TransformationCapability] = {
         "PARTIAL_FILTER_LINEAGE",
         "Filter predicates and row-level effects are not represented in column-value lineage.",
     ),
-    "joiner": _metadata("Join keys, join semantics, and row effects are not interpreted."),
+    "joiner": _partial(
+        "PARTIAL_JOINER_LINEAGE",
+        "Supported equality join keys and row-retention types are generated in dbt; column-value lineage does not model row-level join effects.",
+    ),
     "lookup": _metadata("Lookup source, conditions, defaults, and match behavior are not interpreted."),
     "lookup procedure": _metadata("Lookup source, conditions, defaults, and match behavior are not interpreted."),
     "aggregator": _metadata("Grouping, aggregate functions, and row effects are not interpreted."),

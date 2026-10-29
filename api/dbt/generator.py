@@ -47,7 +47,7 @@ from .predicates import parse_simple_predicate
 
 DBT_CORE_VERSION = "1.12.6"
 DBT_SNOWFLAKE_VERSION = "1.12.4"
-SUPPORTED_TRANSFORMATIONS = {"source qualifier", "expression", "filter"}
+SUPPORTED_TRANSFORMATIONS = {"source qualifier", "expression", "filter", "joiner"}
 
 
 @dataclass(frozen=True)
@@ -235,6 +235,299 @@ def _render_expression(
         ]
         return dialect.render_function(expression, arguments)
     raise ValueError(f"Unsupported expression AST node: {type(expression).__name__}.")
+
+
+def _join_conjuncts(expression: Expression) -> list[Expression]:
+    if isinstance(expression, BinaryOperator) and expression.operator == "AND":
+        return _join_conjuncts(expression.left) + _join_conjuncts(expression.right)
+    return [expression]
+
+
+def _build_joiner_relation(
+    transformation: Transformation,
+    instance: Instance,
+    instance_key: str,
+    parent_keys: list[str],
+    incoming: dict[tuple[str, str], list],
+    relations: dict[str, _Relation],
+    dialect: SqlDialect,
+) -> tuple[str, _Relation]:
+    def blocked(code: str, message: str, field: str | None = None):
+        raise _GenerationBlocked(_Block(code, message, instance.name, field))
+
+    attributes: dict[str, list[str]] = defaultdict(list)
+    for name, value in transformation.attributes.items():
+        attributes[_attribute_key(name)].append(value.strip())
+
+    join_conditions = sorted({
+        value for value in attributes.get("join condition", []) if value
+    })
+    if len(join_conditions) != 1:
+        blocked(
+            "MISSING_JOIN_CONDITION",
+            f"Joiner '{instance.name}' must declare exactly one Join Condition.",
+            "Join Condition",
+        )
+    join_types = sorted({
+        value for value in attributes.get("join type", []) if value
+    })
+    if len(join_types) > 1:
+        blocked(
+            "CONFLICTING_JOIN_TYPES",
+            f"Joiner '{instance.name}' declares conflicting Join Type values.",
+            "Join Type",
+        )
+    join_type = _attribute_key(join_types[0]) if join_types else "normal"
+    join_sql = {
+        "normal": "INNER JOIN",
+        "master outer": "RIGHT OUTER JOIN",
+        "detail outer": "LEFT OUTER JOIN",
+        "full outer": "FULL OUTER JOIN",
+    }.get(join_type)
+    if join_sql is None:
+        blocked(
+            "UNSUPPORTED_JOIN_TYPE",
+            f"Joiner '{instance.name}' uses unsupported join type '{join_types[0]}'.",
+            "Join Type",
+        )
+
+    ports_by_group_name: dict[tuple[str, str], Port] = {}
+    for port in transformation.ports:
+        group = normalize_identifier(port.group.strip())
+        if group not in {"master", "detail"}:
+            continue
+        key = (group, normalize_identifier(port.name))
+        if key in ports_by_group_name:
+            blocked(
+                "AMBIGUOUS_JOINER_PORT",
+                f"Joiner '{instance.name}' has duplicate {group} port '{port.name}'.",
+                port.name,
+            )
+        ports_by_group_name[key] = port
+
+    connectors_by_group_port: dict[tuple[str, str], list] = defaultdict(list)
+    group_parents: dict[str, str] = {}
+    for (to_instance, to_field), connectors in incoming.items():
+        if to_instance != instance_key:
+            continue
+        candidates = [
+            (group, name) for group, name in ports_by_group_name
+            if name == to_field
+        ]
+        if len(candidates) != 1:
+            blocked(
+                "UNRESOLVED_JOINER_INPUT_GROUP",
+                f"Joiner input '{to_field}' must resolve to one MASTER or DETAIL port group.",
+                to_field,
+            )
+        group, port_name = candidates[0]
+        if len(connectors) != 1:
+            blocked(
+                "AMBIGUOUS_JOINER_INPUT",
+                f"Joiner port '{to_field}' must have exactly one incoming connector.",
+                to_field,
+            )
+        connector = connectors[0]
+        parent_key = normalize_identifier(connector.from_instance)
+        previous = group_parents.setdefault(group, parent_key)
+        if previous != parent_key:
+            blocked(
+                "MULTIPLE_JOINER_GROUP_INPUTS",
+                f"Joiner {group} ports must come from one input relation.",
+                to_field,
+            )
+        connectors_by_group_port[(group, port_name)].append(connector)
+
+    if set(group_parents) != {"master", "detail"}:
+        blocked(
+            "JOINER_REQUIRES_MASTER_AND_DETAIL",
+            f"Joiner '{instance.name}' must have one MASTER and one DETAIL input relation.",
+        )
+    if len(set(group_parents.values())) != 2 or set(group_parents.values()) != set(parent_keys):
+        blocked(
+            "JOINER_REQUIRES_TWO_INPUTS",
+            f"Joiner '{instance.name}' must combine exactly two distinct input relations.",
+        )
+    for group, parent_key in group_parents.items():
+        if parent_key not in relations:
+            blocked(
+                "UNRESOLVED_JOINER_INPUT",
+                f"Joiner {group} input relation is unresolved.",
+            )
+
+    def resolve_join_port(reference: PortReference) -> str:
+        parts = reference.name.split(".")
+        if len(parts) != 2:
+            blocked(
+                "INVALID_JOIN_CONDITION",
+                f"Join condition reference '{reference.name}' must use MASTER.field or DETAIL.field.",
+                "Join Condition",
+            )
+        group = normalize_identifier(parts[0])
+        port_name = normalize_identifier(parts[1])
+        if group not in {"master", "detail"}:
+            blocked(
+                "INVALID_JOIN_CONDITION",
+                f"Join condition reference '{reference.name}' must use MASTER or DETAIL.",
+                "Join Condition",
+            )
+        if (group, port_name) not in ports_by_group_name:
+            blocked(
+                "UNRESOLVED_JOIN_CONDITION_PORT",
+                f"Join condition references unknown {group} port '{parts[1]}'.",
+                parts[1],
+            )
+        connectors = connectors_by_group_port.get((group, port_name), [])
+        if len(connectors) != 1:
+            blocked(
+                "UNRESOLVED_JOIN_CONDITION_PORT",
+                f"Join condition port '{reference.name}' is not connected exactly once.",
+                parts[1],
+            )
+        connector = connectors[0]
+        relation = relations[group_parents[group]]
+        column = relation.columns.get(normalize_identifier(connector.from_field))
+        if column is None:
+            blocked(
+                "UNRESOLVED_JOIN_CONDITION_FIELD",
+                f"Join condition input '{connector.from_field}' is not produced upstream.",
+                parts[1],
+            )
+        alias = "__master" if group == "master" else "__detail"
+        return (
+            f"{dialect.sql_identifier(alias, context='relation')}."
+            f"{dialect.sql_identifier(column)}"
+        )
+
+    condition = join_conditions[0]
+    try:
+        condition_ast = parse_expression(condition)
+    except ExpressionSyntaxError as error:
+        blocked(
+            "INVALID_JOIN_CONDITION",
+            f"Joiner '{instance.name}' has an invalid Join Condition: {error}",
+            "Join Condition",
+        )
+    predicates = _join_conjuncts(condition_ast)
+    rendered_predicates = []
+    for predicate in predicates:
+        if (
+            not isinstance(predicate, BinaryOperator)
+            or predicate.operator != "="
+            or not isinstance(predicate.left, PortReference)
+            or not isinstance(predicate.right, PortReference)
+        ):
+            blocked(
+                "NON_EQUI_JOIN_CONDITION",
+                f"Joiner '{instance.name}' supports only equality conditions joined with AND.",
+                "Join Condition",
+            )
+        left_parts = predicate.left.name.split(".")
+        right_parts = predicate.right.name.split(".")
+        if (
+            len(left_parts) != 2
+            or len(right_parts) != 2
+            or normalize_identifier(left_parts[0]) == normalize_identifier(right_parts[0])
+            or {normalize_identifier(left_parts[0]), normalize_identifier(right_parts[0])}
+            != {"master", "detail"}
+        ):
+            blocked(
+                "NON_EQUI_JOIN_CONDITION",
+                f"Joiner '{instance.name}' conditions must compare one MASTER port with one DETAIL port.",
+                "Join Condition",
+            )
+        rendered_predicates.append(
+            f"{resolve_join_port(predicate.left)} = {resolve_join_port(predicate.right)}"
+        )
+
+    outputs = [
+        port for port in transformation.ports
+        if "OUTPUT" in port.porttype.upper()
+        and "VARIABLE" not in port.porttype.upper()
+    ]
+    if not outputs:
+        blocked(
+            "NO_JOINER_OUTPUTS",
+            f"Joiner '{instance.name}' has no output ports.",
+        )
+    projections = []
+    columns: dict[str, str] = {}
+    for port in sorted(outputs, key=lambda item: normalize_identifier(item.name)):
+        group = normalize_identifier(port.group.strip())
+        port_key = normalize_identifier(port.name)
+        if group not in {"master", "detail"}:
+            matching_groups = [
+                candidate_group
+                for candidate_group, candidate_name in connectors_by_group_port
+                if candidate_name == port_key
+            ]
+            if len(matching_groups) == 1:
+                group = matching_groups[0]
+            else:
+                blocked(
+                    "UNRESOLVED_JOINER_OUTPUT_GROUP",
+                    f"Joiner output '{port.name}' must resolve to one MASTER or DETAIL group.",
+                    port.name,
+                )
+        if port.expression:
+            blocked(
+                "JOINER_OUTPUT_EXPRESSION_UNSUPPORTED",
+                f"Joiner output port '{port.name}' has an expression outside the supported subset.",
+                port.name,
+            )
+        connectors = connectors_by_group_port.get((group, port_key), [])
+        if len(connectors) != 1:
+            blocked(
+                "UNRESOLVED_JOINER_OUTPUT",
+                f"Joiner output '{port.name}' must map to exactly one incoming port.",
+                port.name,
+            )
+        connector = connectors[0]
+        relation = relations[group_parents[group]]
+        source_column = relation.columns.get(normalize_identifier(connector.from_field))
+        if source_column is None:
+            blocked(
+                "UNRESOLVED_JOINER_OUTPUT_FIELD",
+                f"Joiner input '{connector.from_field}' is not produced upstream.",
+                port.name,
+            )
+        if port_key in columns:
+            blocked(
+                "DUPLICATE_JOINER_OUTPUT",
+                f"Joiner '{instance.name}' has duplicate output port '{port.name}'.",
+                port.name,
+            )
+        output_name = snake_case(port.name)
+        alias = "__master" if group == "master" else "__detail"
+        projections.append(
+            f"    {dialect.sql_identifier(alias, context='relation')}."
+            f"{dialect.sql_identifier(source_column)} as "
+            f"{dialect.sql_identifier(output_name)}"
+        )
+        columns[port_key] = output_name
+
+    def from_relation(group: str) -> str:
+        relation = relations[group_parents[group]]
+        source_sql = (
+            dialect.sql_identifier(relation.sql, context="relation")
+            if relation.is_cte else relation.sql
+        )
+        alias = "__master" if group == "master" else "__detail"
+        return (
+            f"{source_sql} as "
+            f"{dialect.sql_identifier(alias, context='relation')}"
+        )
+
+    cte_name = snake_case(instance.name)
+    projection_sql = ",\n".join(projections)
+    cte_sql = (
+        f"{dialect.sql_identifier(cte_name, context='relation')} as (\n"
+        f"  select\n{projection_sql}\n"
+        f"  from {from_relation('master')}\n"
+        f"  {join_sql} {from_relation('detail')}\n"
+        f"    on {' AND '.join(rendered_predicates)}\n)"
+    )
+    return cte_sql, _Relation(sql=cte_name, columns=columns, is_cte=True)
 
 
 class _ProjectBuilder:
@@ -859,6 +1152,19 @@ class _ProjectBuilder:
                     raise _GenerationBlocked(blocks)
 
             parent_keys = sorted(set(parents.get(instance_key, [])))
+            if type_name == "joiner":
+                joiner_sql, joiner_relation = _build_joiner_relation(
+                    transformation,
+                    instance,
+                    instance_key,
+                    parent_keys,
+                    incoming,
+                    relations,
+                    self.dialect,
+                )
+                ctes.append(joiner_sql)
+                relations[instance_key] = joiner_relation
+                continue
             if len(parent_keys) > 1:
                 raise _GenerationBlocked(_Block(
                     "MULTIPLE_INPUT_RELATIONS",

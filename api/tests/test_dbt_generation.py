@@ -26,6 +26,7 @@ from api.parser.expressions import FunctionCall, Literal, PortReference
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SAMPLES_DIR = REPO_ROOT / "samples"
 GOLDEN = Path(__file__).parent / "golden" / "m_member_enrollment.json"
+CLAIMS_GOLDEN = Path(__file__).parent / "golden" / "m_claims_member_join.json"
 
 SUPPORTED_XML = b"""<POWERMART><REPOSITORY NAME="R"><FOLDER NAME="F">
   <SOURCE NAME="S">
@@ -161,7 +162,7 @@ def test_unknown_function_is_diagnostic_and_blocks_its_target():
 def test_unsupported_transformation_marks_target_placeholder():
     xml = SUPPORTED_XML.replace(
         b'<TRANSFORMATION NAME="FIL" TYPE="Filter">',
-        b'<TRANSFORMATION NAME="FIL" TYPE="Joiner">',
+        b'<TRANSFORMATION NAME="FIL" TYPE="Vendor Custom">',
         1,
     )
     project = _project(xml)
@@ -278,6 +279,20 @@ def test_sample_project_matches_golden_files():
     files = build_project(sample).files
     assert set(files) == set(expected) | {"requirements.lock"}
     assert {path: content for path, content in files.items() if path != "requirements.lock"} == expected
+    assert files["requirements.lock"] == DBT_REQUIREMENTS_LOCK
+
+
+def test_claims_member_sample_project_matches_golden_files():
+    sample = parse_powercenter_xml(
+        (SAMPLES_DIR / "m_claims_member_join.xml").read_bytes()
+    )
+    expected = json.loads(CLAIMS_GOLDEN.read_text())
+    files = build_project(sample).files
+    assert set(files) == set(expected) | {"requirements.lock"}
+    assert {
+        path: content for path, content in files.items()
+        if path != "requirements.lock"
+    } == expected
     assert files["requirements.lock"] == DBT_REQUIREMENTS_LOCK
 
 

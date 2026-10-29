@@ -27,7 +27,12 @@ def _field(node, port=False):
     attrs = _attrs(node)
     values = {key: attrs.get(key.upper(), "") for key in ("name", "datatype", "precision", "scale")}
     if port:
-        return Port(**values, porttype=attrs.get("PORTTYPE", ""), expression=attrs.get("EXPRESSION", ""))
+        return Port(
+            **values,
+            porttype=attrs.get("PORTTYPE", ""),
+            expression=attrs.get("EXPRESSION", ""),
+            group=attrs.get("GROUP", ""),
+        )
     return Field(**values)
 
 

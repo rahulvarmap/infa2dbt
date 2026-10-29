@@ -19,6 +19,17 @@ from .generator import DbtProject, SeedTable, build_project
 
 
 _SEED_ROWS = 6
+_CLAIMS_MEMBER_SYNTHETIC_VALUES: dict[str, dict[str, tuple[str | None, ...]]] = {
+    "claims": {
+        "claim_id": ("C001", "C002", "C003", "C004", "C005", "C006"),
+        "member_id": ("M001", "M002", "M002", "M004", "M999", None),
+        "claim_amount": ("100", "200", "75", "300", "400", "500"),
+    },
+    "member": {
+        "member_id": ("M001", "M002", "M003", "M004", "M005", None),
+        "member_name": ("Ada", "Grace", "Katherine", "Alan", "Margaret", None),
+    },
+}
 
 
 def _birthday(reference: date, years_ago: int = 25) -> date:
@@ -79,8 +90,16 @@ def _synthetic_value(field: Field, row_index: int, reference: date) -> str | Non
 def synthetic_seed_rows(source: Source, reference: date | None = None) -> list[list[str | None]]:
     """Create repeatable representative rows, including NULLs and date boundaries."""
     reference = reference or datetime.now(timezone.utc).date()
+    overrides = _CLAIMS_MEMBER_SYNTHETIC_VALUES.get(
+        normalize_identifier(source.name), {}
+    )
     return [
-        [_synthetic_value(field, row_index, reference) for field in source.fields]
+        [
+            overrides.get(normalize_identifier(field.name), ())[row_index]
+            if normalize_identifier(field.name) in overrides
+            else _synthetic_value(field, row_index, reference)
+            for field in source.fields
+        ]
         for row_index in range(_SEED_ROWS)
     ]
 
