@@ -5,8 +5,6 @@ from __future__ import annotations
 import csv
 import json
 import os
-import shutil
-import subprocess
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -115,13 +113,9 @@ def prepare_validation_workspace(
     return project
 
 
-def _run_dbt(workspace: Path, command: str) -> subprocess.CompletedProcess[str]:
-    executable = shutil.which("dbt")
-    if not executable:
-        raise RuntimeError("dbt CLI is not installed for project validation.")
-    return subprocess.run(
+def _run_dbt(runner: Any, workspace: Path, command: str) -> Any:
+    return runner.invoke(
         [
-            executable,
             command,
             "--project-dir",
             str(workspace),
@@ -130,13 +124,8 @@ def _run_dbt(workspace: Path, command: str) -> subprocess.CompletedProcess[str]:
             "--target-path",
             str(workspace / "target"),
             "--no-partial-parse",
+            "--quiet",
         ],
-        cwd=workspace,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=8,
-        env={**os.environ, "DBT_SEND_ANONYMOUS_USAGE_STATS": "false"},
     )
 
 
@@ -149,9 +138,11 @@ def _step(name: str, command: str | None = None) -> dict[str, str]:
     }
 
 
-def _failure_text(result: subprocess.CompletedProcess[str]) -> str:
-    output = (result.stdout + "\n" + result.stderr).strip()
-    return output[-3000:] or f"dbt exited with status {result.returncode}."
+def _failure_text(result: Any) -> str:
+    error = getattr(result, "exception", None)
+    if error is not None:
+        return str(error)[-3000:]
+    return "dbt command failed. Check the per-model results and retry."
 
 
 def _model_descriptors(project: DbtProject) -> list[dict[str, Any]]:
@@ -183,6 +174,9 @@ def execute_validation_workspace(
     project: DbtProject,
 ) -> dict[str, Any]:
     """Seed, compile, and run models, reporting each model's final status."""
+    from dbt.cli.main import dbtRunner
+
+    runner = dbtRunner()
     steps = [
         _step("seed"),
         _step("compile"),
@@ -192,14 +186,18 @@ def execute_validation_workspace(
     active_models = [model for model in models if model["status"] != "blocked"]
 
     for index, step in enumerate(steps):
+        previous_cwd = Path.cwd()
         try:
-            completed = _run_dbt(workspace, step["command"])
-        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            os.chdir(workspace)
+            completed = _run_dbt(runner, workspace, step["command"])
+        except Exception as error:
             step["status"] = "failed"
             step["message"] = str(error)
             _fail_pending_models(active_models, step["name"], step["message"])
             break
-        if completed.returncode != 0:
+        finally:
+            os.chdir(previous_cwd)
+        if not completed.success:
             step["status"] = "failed"
             step["message"] = _failure_text(completed)
             if step["name"] == "run":
@@ -254,7 +252,7 @@ def _apply_run_results(
         for item in results.get("results", [])
     }
     database = workspace / "validation.duckdb"
-    connection = duckdb.connect(str(database), read_only=True)
+    connection = duckdb.connect(str(database))
     try:
         for model in models:
             result = by_name.get(model["name"])
