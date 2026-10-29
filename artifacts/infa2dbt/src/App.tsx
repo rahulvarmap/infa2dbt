@@ -293,7 +293,7 @@ function Home() {
           <div className="action-bar">
             <div className="privacy-note">
               <LockKeyhole size={15} className="shrink-0" />
-              <span>File contents are checked in memory, not saved.</span>
+              <span>Files are processed temporarily and not kept after parsing.</span>
             </div>
             <button
               type="button"
@@ -326,7 +326,7 @@ function Home() {
                 <div className="file-type-icon"><FileCode2 size={20} /></div>
                 <div className="file-info">
                   <p className="file-name" title={result.filename} data-testid="text-upload-filename">{result.filename}</p>
-                  <p className="file-meta" data-testid="text-upload-size">{formatBytes(result.size_bytes)} · {result.size_bytes.toLocaleString()} bytes</p>
+                  <p className="file-meta" data-testid="text-upload-size">{formatBytes(result.size_bytes)}{result.size_bytes >= 1024 ? ` · ${result.size_bytes.toLocaleString()} bytes` : ''}</p>
                 </div>
               </div>
             </div>
@@ -384,7 +384,7 @@ function Home() {
         </div>
         <footer className="footer-note">
           <span>INFA2DBT · MAPPING INSPECTOR</span>
-          <span>One file at a time. No content stored.</span>
+          <span>One file at a time. Files are processed temporarily and not kept after parsing.</span>
         </footer>
       </main>
     </div>
