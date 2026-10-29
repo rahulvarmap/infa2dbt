@@ -1,19 +1,29 @@
+import asyncio
+import json
+import sys
 from pathlib import Path
-from typing import Annotated
+from typing import Any
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from starlette.datastructures import FormData, UploadFile
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
 
-from api.parser import parse_powercenter_xml, topological_order
-from api.parser.lineage import LineageGraph, mapping_key
-from api.parser.models import LineageData, ParseResponse, TraceResponse
+from api.request_limits import (
+    MAX_FILE_SIZE,
+    MAX_MULTIPART_FIELDS,
+    MAX_MULTIPART_FIELD_SIZE,
+    ProcessingLimitsMiddleware,
+)
 
-MAX_FILE_SIZE = 5 * 1024 * 1024
 FRONTEND_DIST = Path(__file__).resolve().parents[1] / "dist" / "public"
 SAMPLES_DIR = Path(__file__).resolve().parents[3] / "samples"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+WORKER_SCRIPT = REPO_ROOT / "api" / "processing_worker.py"
 
 app = FastAPI(title="Informatica to dbt Migrator")
+app.add_middleware(ProcessingLimitsMiddleware)
 
 
 @app.get("/health")
@@ -24,55 +34,148 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-async def read_xml_upload(file: UploadFile) -> tuple[str, bytes] | JSONResponse:
-    filename = file.filename or ""
+@app.get("/ready")
+@app.get("/api/ready")
+async def readiness() -> JSONResponse:
+    sample = sample_files().get("m_member_enrollment.xml")
+    if sample is None or sample.stat().st_size > MAX_FILE_SIZE:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "checks": {"sample": "unavailable"}},
+        )
+    return JSONResponse(content={"status": "ready"})
+
+
+async def read_xml_upload(
+    request: Request,
+    *,
+    allowed_fields: set[str] | None = None,
+    require_file: bool = True,
+) -> tuple[str | None, bytes | None, dict[str, str]] | JSONResponse:
+    allowed_fields = allowed_fields or set()
     try:
-        if not filename.lower().endswith(".xml"):
-            return JSONResponse(status_code=400, content={"error": "Only .xml files are accepted."})
-        contents = await file.read(MAX_FILE_SIZE + 1)
-        if len(contents) > MAX_FILE_SIZE:
-            return JSONResponse(status_code=413, content={"error": "File must be 5 MB or smaller."})
-        return filename, contents
+        form: FormData = await request.form(
+            max_files=1,
+            max_fields=MAX_MULTIPART_FIELDS,
+            max_part_size=MAX_MULTIPART_FIELD_SIZE,
+        )
+    except StarletteHTTPException as error:
+        detail = str(error.detail)
+        too_many_parts = "Too many files" in detail or "Too many fields" in detail
+        message = (
+            "Include at most one uploaded file and four text fields."
+            if too_many_parts
+            else "Upload a valid multipart form."
+        )
+        return JSONResponse(status_code=413 if too_many_parts else 400, content={"error": message})
+
+    fields: dict[str, str] = {}
+    filename: str | None = None
+    contents: bytes | None = None
+    try:
+        for key, value in form.multi_items():
+            if isinstance(value, UploadFile):
+                if key != "file":
+                    return JSONResponse(
+                        status_code=400,
+                        content={"error": "Use the multipart field named 'file'."},
+                    )
+                filename = value.filename or ""
+                if not filename.lower().endswith(".xml"):
+                    return JSONResponse(
+                        status_code=400,
+                        content={"error": "Only .xml files are accepted."},
+                    )
+                contents = await value.read(MAX_FILE_SIZE + 1)
+                if len(contents) > MAX_FILE_SIZE:
+                    return JSONResponse(
+                        status_code=413,
+                        content={"error": "File must be 5 MB or smaller."},
+                    )
+                continue
+            if key == "file" or key not in allowed_fields:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": f"Unexpected multipart field: {key}."},
+                )
+            if key in fields:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": f"Duplicate multipart field: {key}."},
+                )
+            fields[key] = value
+
+        if require_file and filename is None:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Provide one XML file in the multipart field named 'file'."},
+            )
+        return filename, contents, fields
     finally:
-        await file.close()
+        await form.close()
 
 
 @app.post("/upload")
 @app.post("/api/upload")
-async def upload_xml(file: Annotated[UploadFile, File(...)]) -> JSONResponse:
-    upload = await read_xml_upload(file)
+async def upload_xml(request: Request) -> JSONResponse:
+    upload = await read_xml_upload(request)
     if isinstance(upload, JSONResponse):
         return upload
-    filename, contents = upload
+    filename, contents, _ = upload
+    assert filename is not None and contents is not None
     return JSONResponse(content={"filename": filename, "size_bytes": len(contents)})
 
 
-def parse_response(contents: bytes) -> JSONResponse:
+async def process_in_worker(
+    contents: bytes, fields: dict[str, str] | None = None
+) -> JSONResponse:
+    worker_fields = dict(fields or {})
+    mode = worker_fields.pop("mode", "parse")
+    header = json.dumps({"mode": mode, "fields": worker_fields}).encode() + b"\n"
+    process: asyncio.subprocess.Process | None = None
     try:
-        result = parse_powercenter_xml(contents)
-        orders = {}
-        lineage = LineageData()
-        for mapping in result.mappings:
-            key = mapping_key(mapping, result.mappings)
-            if key in orders:
-                raise ValueError(f"Duplicate mapping identity: {key}.")
-            orders[key] = topological_order(mapping)
-            graph = LineageGraph(mapping).as_model(key, scoped=len(result.mappings) > 1)
-            lineage.nodes.extend(graph.nodes)
-            lineage.edges.extend(graph.edges)
-        response = ParseResponse(**result.model_dump(), execution_order=orders, lineage=lineage)
-        return JSONResponse(content=response.model_dump())
-    except ValueError as error:
-        return JSONResponse(status_code=400, content={"error": str(error)})
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            str(WORKER_SCRIPT),
+            cwd=REPO_ROOT,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await process.communicate(header + contents)
+        if process.returncode != 0:
+            return JSONResponse(
+                status_code=500, content={"error": "XML processing failed."}
+            )
+        result: Any = json.loads(stdout)
+        if (
+            not isinstance(result, dict)
+            or not isinstance(result.get("status_code"), int)
+            or not isinstance(result.get("content"), dict)
+        ):
+            raise ValueError("Invalid response from XML worker.")
+        return JSONResponse(
+            status_code=result["status_code"],
+            content=result["content"],
+        )
+    except asyncio.CancelledError:
+        if process is not None and process.returncode is None:
+            process.kill()
+            await process.wait()
+        raise
+    except (OSError, ValueError, json.JSONDecodeError):
+        return JSONResponse(status_code=500, content={"error": "XML processing failed."})
 
 
 @app.post("/parse")
 @app.post("/api/parse")
-async def parse_xml(file: Annotated[UploadFile, File(...)]) -> JSONResponse:
-    upload = await read_xml_upload(file)
+async def parse_xml(request: Request) -> JSONResponse:
+    upload = await read_xml_upload(request)
     if isinstance(upload, JSONResponse):
         return upload
-    return parse_response(upload[1])
+    _, contents, _ = upload
+    assert contents is not None
+    return await process_in_worker(contents)
 
 
 def sample_files() -> dict[str, Path]:
@@ -100,28 +203,35 @@ async def parse_sample(filename: str) -> JSONResponse:
         contents = sample.read(MAX_FILE_SIZE + 1)
     if len(contents) > MAX_FILE_SIZE:
         return JSONResponse(status_code=413, content={"error": "Sample must be 5 MB or smaller."})
-    return parse_response(contents)
+    return await process_in_worker(contents)
 
 
 @app.post("/lineage/trace")
 @app.post("/api/lineage/trace")
-async def trace_lineage(
-    target_instance: Annotated[str, Form(...)],
-    target_field: Annotated[str, Form(...)],
-    file: Annotated[UploadFile | None, File()] = None,
-    sample_name: Annotated[str | None, Form()] = None,
-    mapping: Annotated[str | None, Form()] = None,
-) -> JSONResponse:
-    if (file is None) == (sample_name is None):
-        if file is not None:
-            await file.close()
-        return JSONResponse(status_code=400, content={"error": "Provide exactly one XML file or sample_name."})
-    if file is not None:
-        upload = await read_xml_upload(file)
-        if isinstance(upload, JSONResponse):
-            return upload
-        contents = upload[1]
+async def trace_lineage(request: Request) -> JSONResponse:
+    upload = await read_xml_upload(
+        request,
+        allowed_fields={"target_instance", "target_field", "mapping", "sample_name"},
+        require_file=False,
+    )
+    if isinstance(upload, JSONResponse):
+        return upload
+    filename, file_contents, fields = upload
+    if "target_instance" not in fields or "target_field" not in fields:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Provide target_instance and target_field."},
+        )
+    sample_name = fields.get("sample_name")
+    if (file_contents is None) == (sample_name is None):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Provide exactly one XML file or sample_name."},
+        )
+    if file_contents is not None:
+        contents = file_contents
     else:
+        assert sample_name is not None
         path = sample_files().get(sample_name)
         if path is None:
             return JSONResponse(status_code=404, content={"error": "Sample not found."})
@@ -129,25 +239,14 @@ async def trace_lineage(
             contents = sample.read(MAX_FILE_SIZE + 1)
         if len(contents) > MAX_FILE_SIZE:
             return JSONResponse(status_code=413, content={"error": "Sample must be 5 MB or smaller."})
-    try:
-        result = parse_powercenter_xml(contents)
-        matches = [
-            item for item in result.mappings
-            if (mapping is None or mapping_key(item, result.mappings) == mapping)
-            and any(i.name.casefold() == target_instance.casefold() for i in item.instances)
-        ]
-        if not matches:
-            raise ValueError("Target instance or mapping not found.")
-        if len(matches) != 1:
-            raise ValueError("Target instance is ambiguous; provide the mapping identity.")
-        selected = matches[0]
-        response = TraceResponse(
-            mapping=mapping_key(selected, result.mappings),
-            hops=LineageGraph(selected).trace_field(target_instance, target_field),
-        )
-        return JSONResponse(content=response.model_dump())
-    except ValueError as error:
-        return JSONResponse(status_code=400, content={"error": str(error)})
+    worker_fields = {
+        "mode": "trace",
+        "target_instance": fields["target_instance"],
+        "target_field": fields["target_field"],
+    }
+    if "mapping" in fields:
+        worker_fields["mapping"] = fields["mapping"]
+    return await process_in_worker(contents, worker_fields)
 
 
 if FRONTEND_DIST.is_dir():

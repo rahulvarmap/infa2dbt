@@ -15,18 +15,18 @@ run = "python ../infa2dbt/api/serve.py"
 [services.production]
 
 [services.production.build]
-args = ["pnpm", "--filter", "@workspace/api-server", "run", "build"]
+args = ["bash", "scripts/install-infa2dbt-python-deps.sh"]
 
 [services.production.build.env]
 NODE_ENV = "production"
 
 [services.production.run]
-# we don't run through pnpm to make startup faster in production
-args = ["python", "artifacts/infa2dbt/api/serve.py"]
+args = ["bash", "scripts/run-infa2dbt-api.sh"]
 
 [services.production.run.env]
 PORT = "8080"
 NODE_ENV = "production"
 
 [services.production.health.startup]
-path = "/api/healthz"
+path = "/api/ready"
+kind = "web"

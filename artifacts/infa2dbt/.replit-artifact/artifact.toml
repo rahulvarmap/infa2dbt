@@ -8,20 +8,20 @@ router = "path"
 
 [[services]]
 name = "web"
-paths = [ "/" ]
+paths = ["/"]
 localPort = 24518
 
 [services.development]
 run = "pnpm --filter @workspace/infa2dbt run dev"
 
 [services.production]
-build = [ "pnpm", "--filter", "@workspace/infa2dbt", "run", "build" ]
+build = ["bash", "scripts/build-infa2dbt-web.sh"]
+
 [services.production.run]
-args = ["python", "artifacts/infa2dbt/api/serve.py"]
+args = ["bash", "scripts/run-infa2dbt-api.sh"]
 
 [services.production.run.env]
 PORT = "24518"
-
 
 [services.env]
 PORT = "24518"

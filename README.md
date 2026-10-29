@@ -3,7 +3,9 @@
 Informatica → dbt Migrator parses one PowerCenter `.xml` export at a time into
 sources, targets, mappings, transformations, ports, instances, and connectors.
 Review the Summary, Ports, and collapsible Raw JSON tabs, or try a bundled sample.
-Uploads are processed in memory; their contents are not saved or logged.
+Use synthetic/sample exports only; do not upload proprietary data. Multipart uploads
+may be temporarily spooled to disk and are closed and cleaned up after each request.
+Request bodies and processing time are bounded; no durable upload storage is used.
 There is no LLM, database, authentication, or dbt code generation in Phase 1.
 
 ## Requirements
@@ -30,15 +32,25 @@ PORT=8080 python artifacts/infa2dbt/api/serve.py
 PORT=24518 BASE_PATH=/ pnpm --filter @workspace/infa2dbt run dev
 ```
 
-The FastAPI routes below are also available with an `/api` prefix in Replit:
+The FastAPI routes below are also available with an `/api` prefix:
 
-- `GET /health`: API readiness.
+- `GET /health`: liveness probe (`{"status":"ok"}`).
+- `GET /ready`: readiness probe; checks that the bundled enrollment sample is available.
 - `POST /upload`: multipart `file`, `.xml` only, at most 5 MiB; returns filename and byte count.
 - `POST /parse`: the same multipart upload; returns the intermediate representation
   (`sources`, `targets`, `mappings`) and `execution_order`, keyed by mapping name.
   Duplicate mapping names are keyed by `repository/folder/name`.
 - `GET /samples`: filename and size for each XML file in the root `samples/` directory.
 - `POST /samples/{filename}/parse`: parse a bundled sample without uploading it.
+- `POST /lineage/trace`: trace a target field from one uploaded XML file or bundled sample.
+
+Upload and trace requests accept at most one file and a 5 MiB XML file. The whole
+multipart body is capped at 5 MiB plus form overhead; parse requests over 50
+mappings are rejected before graph/lineage generation. One processing request at
+a time is accepted on a Replit machine; busy requests receive `429`. Processing
+is stopped after 10 seconds with `504`. Client upload transfer time is outside
+that processing deadline. Autoscale deployments must be limited to one machine in
+Publishing settings for the single-request gate to cover the entire deployment.
 
 `api/parser/` contains the standalone Pydantic models, lxml parser, and stable
 topological ordering. Field precision and scale remain strings to preserve XML

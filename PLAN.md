@@ -13,9 +13,20 @@ Two release objectives must be separated:
 1. **Production inspector:** trustworthy, explicitly scoped parsing/lineage, reliable deployment, bounded resource use, and clear data-handling behavior.
 2. **Production migrator:** everything above, plus a supported transformation compiler and validated dbt output.
 
-**Confirmed release direction:** the next milestone is **dbt model generation targeting Snowflake for internal users**, not an inspector-only release. The inspector is the existing foundation. Snowflake generation and its validation are mandatory release gates, not optional follow-on work. The dbt version, deployment/access mechanism, transformation subset, and generated-project conventions still need decisions.
+**Confirmed release direction:** the next milestone is dbt model generation targeting Snowflake for internal users, not an inspector-only release. The inspector is the existing foundation. Release requirements and implementation priorities reflect the decisions below.
 
 The original no-database/no-authentication scope remains a constraint. This plan does not authorize either feature, or any implementation changes.
+
+### Decisions
+
+- **dbt and delivery:** Use the latest stable dbt-core 1.x release and a matching, compatible dbt-snowflake release. Pin the exact versions in each generated project. Deliver a standalone dbt project as a downloadable ZIP.
+- **Data:** Allow synthetic/sample exports only; do not process proprietary data. Temporary-disk processing is acceptable if temporary data is cleaned up.
+- **PowerCenter scope:** PowerCenter 10.x mapping exports. Sessions, workflows, mapplets, and shortcuts are out of scope and must be explicitly flagged as unsupported.
+- **Lineage:** Column-value provenance. Show incomplete lineage with warnings.
+- **Unsupported constructs:** Emit a partial bundle; clearly mark blocked models and include a diagnostics report.
+- **dbt structure:** One staging model per source, one model per target, views by default, and snake_case model names.
+- **Limits:** 5 MB maximum XML file, 50 mappings, one active user at a time, and a 10-second processing limit.
+- **UI and cleanup:** Correct the “not saved” copy. Explain that processing may use temporary disk and warn users to submit only synthetic/sample exports. Do not claim cleanup or retention guarantees until cleanup has been verified.
 
 ### Review method and limits
 
@@ -192,12 +203,12 @@ Do not remove or duplicate the existing extension/size checks, safe XML errors, 
 
 ### Gaps and deployment-dependent risks
 
-1. **High: application-level file validation is not an ingress body limit.** FastAPI parses multipart input before `read_xml_upload()` reads at most 5 MiB plus one byte. Overall body size, extra file parts, concurrency, and upload duration are not capped by this code. Verify any upstream controls and enforce bounds before parsing/spooling.
+1. **High: application-level file validation is not an ingress body limit.** FastAPI parses multipart input before `read_xml_upload()` reads at most 5 MiB plus one byte. Overall body size, extra file parts, concurrency, and upload duration are not capped by this code. Verify any upstream controls and enforce the 5 MB file limit and other bounds before parsing/spooling.
 2. **High: CPU/memory/output expansion is unbounded at the product level.** XML parsing, repeated ordering, graph construction, and JSON serialization run synchronously inside async routes. Reused definitions serialized into many mappings can expand output far beyond input size. Every trace reparses the document. Bound nodes/ports/connectors/mappings, response size, queue depth, concurrency, and execution time; choose suitable worker isolation. Merely adding `async` or a client timeout does not solve this.
-3. **Privacy statement is too strong.** The installed Starlette multipart parser uses a 1 MiB spooling threshold and can write larger uploads to temporary files before the handler reads them. The UI's “checked in memory, not saved” wording is therefore not guaranteed (`App.tsx:298–302`). No deliberate durable storage was found, but temporary-disk use, cleanup, logging, browser memory/caches, and retention need an explicit policy.
-4. **Internal audience confirmed; access mechanism remains undecided.** Intended internal use does not establish that an endpoint is restricted. Confirm the appropriate deployment/network boundary and the proprietary-export policy. Preserve the no-auth scope unless requirements change; internal users do not automatically require application accounts. Resource and privacy controls still apply.
+3. **Privacy statement is too strong.** The installed Starlette multipart parser uses a 1 MiB spooling threshold and can write larger uploads to temporary files before the handler reads them. The UI's “checked in memory, not saved” wording is therefore not guaranteed (`App.tsx:298–302`). No deliberate durable storage was found; verify cleanup on success, rejection, timeout, cancellation, disconnect, and shutdown, and define how stale temporary files are removed.
+4. **Internal audience confirmed; access mechanism remains undecided.** Intended internal use does not establish that an endpoint is restricted. Confirm the deployment/network boundary and enforce the single-active-user limit outside the UI. Preserve the no-auth scope unless requirements change; resource controls still apply.
 5. **Production boundary settings are unverified.** The FastAPI app does not define security-header, cache/privacy-header, trusted-host, or rate-limit middleware. Check the actual proxy before deciding which controls belong there versus in the app. The unused Express CORS/logger settings must not be counted as FastAPI protection.
-6. **Browser and packaging policy need review.** Google Fonts are requested externally (`index.html:16–18`, `src/index.css:1`). Decide whether enterprise/offline requirements require self-hosting. Define a compatible CSP/framing policy. Audit release inclusion of samples, attachments, internal notes, tests and unused scaffolds; `.replitignore` currently excludes only `.local`, not an explicit product allowlist. No publicly reachable source-directory leak was demonstrated.
+6. **Browser and packaging policy need review.** Google Fonts are requested externally (`index.html:16–18`, `src/index.css:1`). Decide whether internal/offline requirements require self-hosting. Define a compatible CSP/framing policy. Include only approved synthetic samples and audit release inclusion of attachments, internal notes, tests, and unused scaffolds; `.replitignore` currently excludes only `.local`, not an explicit product allowlist. No publicly reachable source-directory leak was demonstrated.
 7. **Sanitize operational errors and keep samples intentional.** The render boundary logs complete error objects to the console (`error-boundary.tsx:77–82`). Review telemetry forwarding/redaction before handling confidential exports. Bundled samples must be approved for public visibility; uploads must never automatically become samples.
 
 ### Dependency audit at review time
@@ -221,26 +232,28 @@ Priority definitions: **P0** = release gate for the internal Snowflake dbt-gener
 
 | Order | Work | Acceptance criteria |
 | --- | --- | --- |
-| 1 | Use the confirmed Snowflake dbt-generation objective and internal audience to define supported inputs and lineage semantics. State the current lack of dbt generation clearly until it exists. | A documented transformation subset, internal-access boundary, and support policy; UI/API do not imply semantic completeness for unsupported constructs. |
+| 1 | Apply the confirmed internal, synthetic/sample-only PowerCenter 10.x scope. Require users to confirm sample-only input; the app cannot determine whether an export is proprietary. Document column-value lineage and warn when incomplete; flag sessions, workflows, mapplets, and shortcuts as unsupported. | The agreed scope and limits are visible at intake, parse, and export; unsupported inputs are never presented as complete conversions. |
 | 2 | Make Python installation and release startup reproducible. | One canonical, locked dependency path; direct `networkx` import is satisfied. The README's requirements-file install is fixed or replaced: that file currently omits NetworkX. A clean release boots the actual Python service, serves built assets, and supports sample/file parse and trace through the intended routes without relying on workspace-installed packages. |
-| 3 | Bound untrusted request and processing resources. | Enforced total-body/file-count/size/duration limits before expensive processing; graph/output/concurrency/time budgets; controlled failure responses; load/adversarial tests show the service remains responsive. |
-| 4 | Add import/reference validation and completeness diagnostics. | Unknown types remain preserved, but missing definitions/ports, unsupported constructs and incomplete expression lineage are explicit. Test the synthetic cases in section 5 and representative real exports. No silent “complete” result for an unsupported mapping. |
+| 3 | Enforce the agreed limits server-side: 5 MB per XML, 50 mappings, one active user, and 10 seconds of processing. | Test boundaries (including 50/51 mappings), concurrent users and jobs, and timeout cleanup. Enforce at the service/deployment boundary across replicas, not only in browser controls; decide whether busy jobs are queued or rejected. Reject over-limit input and time out without returning malformed or truncated ZIPs. |
+| 4 | Add import/reference validation and completeness diagnostics. | Unknown types remain preserved, but missing definitions/ports, unsupported constructs and incomplete column-value lineage are explicit and warned about. Sessions, workflows, mapplets, and shortcuts receive clear unsupported diagnostics. Partial output enumerates blocked models and reasons; unsupported semantics are not silently represented as complete SQL. |
+| 5 | Correct upload messaging and clean up temporary XML/ZIP files. | UI says synthetic/sample exports only and explains that temporary disk may be used. Promise deletion only after cleanup is verified; test success, invalid input, timeout, cancellation, disconnect, shutdown, and stale-file cleanup. |
 
 The internal migrator release needs both these foundation gates and the Snowflake generation gates below. Internal deployment may reduce exposure but does not make lineage or generated SQL correct.
 
 ### P0 — deliver validated Snowflake dbt model generation
 
-This is the confirmed next-release goal and missing product functionality, not a small hardening patch. Implement against validated IR; the permitted transformation subset and dbt conventions remain open:
+This is the confirmed next-release goal and missing product functionality, not a small hardening patch. Implement against validated IR and the PowerCenter 10.x mapping-export scope above. The transformation subset beyond the explicit exclusions remains to be defined:
 
 1. Define a capability registry and richer, versioned IR, including required source/target metadata and diagnostics.
 2. Implement expression parsing, variable-port resolution, and dependency analysis before attempting SQL translation.
-3. Start with a proposed limited subset: source/target wiring, supported Source Qualifier behavior, Expression functions and Filter predicates. Confirm this subset with representative exports. Reject nonempty unsupported SQL overrides or other semantic features rather than approximating them silently.
-4. Implement Snowflake-specific datatype, identifier/quoting, and expression translation. Verify PowerCenter versus Snowflake behavior for `DECODE`/`IIF`, nulls, trimming/concatenation, dates/time zones, timestamp types and decimal precision/scale. Similar function names are not proof of equivalent behavior.
-5. Emit deterministic Snowflake model SQL, `sources.yml`/schema YAML, dbt `source()`/`ref()` references, documentation and a diagnostic/export manifest. Choose model granularity, materializations, and whether to export an existing-project bundle or a standalone project explicitly.
-6. Add joins/lookups/aggregates and other transformations only with independent semantic fixtures and confirmed release requirements. Stateful, procedural, external-code, or DML-oriented constructs may require a documented manual-redesign path.
-7. Validate with the chosen dbt version and Snowflake adapter using `dbt parse`/`dbt compile` and approved Snowflake-backed result comparisons. Cover nulls, dates/time zones, decimals, duplicate rows, join cardinality, filter behavior and any supported incremental updates. Warehouse validation is separate from adding an application database.
+3. Confirm which in-scope transformations, functions and mapping variants the first release supports. Test with representative PowerCenter 10.x exports. Treat unsupported semantics as diagnostics, not assumed equivalences.
+4. Implement Snowflake-specific datatype, identifier/quoting and expression translation for column-value provenance. Verify PowerCenter/Snowflake behavior for `DECODE`/`IIF`, nulls, trimming/concatenation, dates/time zones, timestamp types and decimal precision/scale.
+5. Emit a standalone dbt project: one staging view per source and one view per target, using snake_case model names. Include `dbt_project.yml`, sources/schema YAML, deterministic model SQL and install/use instructions. Pin the exact latest stable dbt-core 1.x version and compatible dbt-snowflake version in the project; include a lockfile so dependency resolution is reproducible.
+6. Generate a downloadable ZIP and diagnostics report. Include supported models, list blocked model names and reasons, and clearly mark each blocked model in the bundle. Do not emit executable SQL that appears to implement a blocked model. Clean up temporary source XML and ZIP files.
+7. Enforce the agreed limits server-side: 5 MB per input XML, 50 mappings, one active user at a time, and a 10-second processing limit. Test the boundaries, timeouts, and concurrent requests across the deployed service topology.
+8. Validate generated projects with the pinned dbt-core/Snowflake adapter using `dbt parse`/`dbt compile` and approved Snowflake-backed result comparisons. Test nulls, dates/time zones, decimals, duplicates, join cardinality, and filter behavior. Keep Snowflake profiles and credentials local to the user; never request or include secrets in the app or ZIP. Warehouse validation is separate from adding an application database.
 
-**Migration acceptance:** supported exports produce repeatable Snowflake dbt output that compiles and has verified results; unsupported constructs produce actionable blockers; partial output is never labelled production-equivalent. The existing inspector alone does not meet this release goal.
+**Migration acceptance:** an eligible sample export produces a repeatable, standalone Snowflake dbt ZIP that compiles using its pinned versions; it contains one staging view per source and one view per target, named in snake_case; incomplete lineage is warned about; unsupported constructs are reported; blocked models are clearly marked and never represented as working SQL; temporary files are cleaned up; and all agreed limits are enforced. The existing inspector alone does not meet this release goal.
 
 ### P1 — reliability and maintainability
 
@@ -248,32 +261,23 @@ This is the confirmed next-release goal and missing product functionality, not a
 2. **Fix workspace/setup inconsistencies.** Remove or guard the registered DB-push setup behavior after scope approval; reconcile `replit.md`, README, Python dependency declarations, and product-specific build instructions. Decide whether to keep two Python production services and the unused Node/DB scaffolds; do not delete or rewire them blindly.
 3. **Expand automated coverage and CI.** Frozen dependency installation; Python tests; frontend tests with Python dependencies available; workspace typecheck; product builds; contract consistency; published-topology smoke tests. Commit real-browser coverage for graph fitting/resizing and trace behavior: the current DOM tests mock the canvas.
 4. **Address remaining audited packages narrowly.** Upgrade only affected tooling dependencies to compatible safe versions; rerun relevant tests/typecheck/build/audits. Add Python dependency scanning and dependency/license review to the release checks.
-5. **Define data handling and operations.** Correct temporary-storage messaging, document cleanup/retention and sample policy, add privacy-safe latency/error/resource metrics, cancellation/deadline behavior, and readiness checks. Choose infrastructure versus app controls based on the agreed access model.
+5. **Define data handling and operations.** Add privacy-safe latency/error/resource metrics, cancellation/deadline behavior, and readiness checks. Confirm which internal deployment/access boundary restricts use while keeping application authentication out of scope.
 
 ### P2 — scale and usability
 
-- Avoid the initial double upload and repeated full parse on every trace, subject to the agreed no-persistence policy. Any in-memory reuse needs bounded size/lifetime and isolation; a database is not required.
+- Avoid the initial double upload and repeated full parse on every trace. Any in-memory reuse must be bounded and request-scoped; temporary XML and ZIP files still require cleanup. A database is not required.
 - Build an explicit trace dependency DAG/edge list for branch-aware explanations instead of inferring all path edges from a flat hop set.
 - Benchmark larger, branched and multi-mapping exports. Add graph grouping/virtualization or declared size limits. The current minimum zoom of 0.2 can prevent fitting sufficiently large graphs, and the inspector eagerly stringifies all IR even when Raw JSON is collapsed.
 - Add keyboard/screen-reader interaction tests, reduced-motion behavior, guarded theme storage, and offline/font policy checks.
 - Document release, rollback and incident procedures; test graceful overload/shutdown and the exact production image, not only development preview.
 
-## 8. Confirmed intent and remaining questions
+## 8. Remaining questions
 
-Confirmed:
+1. Which in-scope transformations and expression functions must the first release support?
+2. Which PowerCenter 10.x export variants should the fixtures cover?
+3. What internal deployment/access boundary will restrict use without adding application authentication?
+4. Should requests that exceed the single-user/processing limit be rejected or queued?
+5. Which exact staging/target names should be used when snake_case conversion causes collisions?
+6. Should the 10-second timer include file upload/download transfer, or only server-side processing?
 
-- **Next release:** dbt model generation.
-- **Warehouse:** Snowflake.
-- **Audience:** internal users.
-
-Remaining questions:
-
-1. **dbt target/deployment:** which dbt version and Snowflake adapter version? Standalone generated project or files for an existing project? What internal deployment/access boundary is required?
-2. **Data policy:** are proprietary production exports permitted, and is temporary-disk processing acceptable?
-3. **PowerCenter scope:** which versions/export variants and representative transformation types are required? Are sessions, workflows, mapplets and shared-folder shortcuts in scope?
-4. **Lineage meaning:** column-value provenance only, or also filter/join/lookup/aggregate row dependencies? May incomplete lineage be shown with warnings?
-5. **Unsupported behavior:** should conversion fail for an entire mapping, emit a clearly blocked partial bundle, or support explicitly approved manual steps?
-6. **dbt design:** models per target or another granularity? Required naming, source schema/owner rules, materializations, incremental keys, and update/delete semantics?
-7. **Operational limits:** expected file/mapping/graph sizes, concurrent users, latency targets, retention requirements and offline/enterprise restrictions?
-
-The release direction is confirmed. The remaining compiler and deployment details are proposed until these questions are answered; no application implementation is authorized by this plan.
+The decisions in section 1 are confirmed. Resolve these implementation details before setting the final acceptance test suite.
