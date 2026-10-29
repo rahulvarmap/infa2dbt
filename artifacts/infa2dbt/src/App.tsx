@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState, type DragEvent, type ChangeEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
-  getGetHealthQueryKey,
-  getHealthCheckQueryKey,
-  useGetHealth,
-  useHealthCheck,
+  getGetReadinessQueryKey,
+  useGetReadiness,
   useListSamples,
   useParseSample,
   useParseXml,
@@ -56,11 +54,8 @@ function Home() {
   const [dark, setDark] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const health = useGetHealth({
-    query: { queryKey: getGetHealthQueryKey(), refetchInterval: 30_000, retry: 1 },
-  });
-  const healthCheck = useHealthCheck({
-    query: { queryKey: getHealthCheckQueryKey(), refetchInterval: 30_000, retry: 1 },
+  const readiness = useGetReadiness({
+    query: { queryKey: getGetReadinessQueryKey(), refetchInterval: 30_000, retry: 1 },
   });
   const upload = useUploadXml();
   const parseXml = useParseXml();
@@ -82,9 +77,9 @@ function Home() {
     window.localStorage.setItem('infa2dbt-theme', dark ? 'dark' : 'light');
   }, [dark]);
 
-  const apiReady = Boolean(health.data && healthCheck.data);
-  const apiError = Boolean(health.isError || healthCheck.isError);
-  const apiLoading = health.isLoading || healthCheck.isLoading;
+  const apiReady = readiness.data?.status === 'ready' && !readiness.isError;
+  const apiError = readiness.isError;
+  const apiLoading = readiness.isLoading;
   const apiState = apiReady ? 'ready' : apiError ? 'error' : 'checking';
 
   function selectFile(candidate: File | undefined) {
@@ -269,7 +264,7 @@ function Home() {
               <button
                 type="button"
                 className="ml-auto shrink-0 font-semibold underline underline-offset-2"
-                onClick={() => { void health.refetch(); void healthCheck.refetch(); }}
+                onClick={() => { void readiness.refetch(); }}
                 data-testid="button-retry-api"
               >
                 Retry

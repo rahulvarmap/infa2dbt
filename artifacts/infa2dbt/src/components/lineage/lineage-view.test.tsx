@@ -4,12 +4,15 @@ import { resolve } from 'node:path';
 import type { ComponentType, MouseEvent, ReactNode } from 'react';
 import type { Window as HappyWindow } from 'happy-dom';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { setBaseUrl, type ParseResponse } from '@workspace/api-client-react';
 import type { Edge, Node } from '@xyflow/react';
 import { LineageView } from './lineage-view';
 import type { ParsedSource } from './lineage-utils';
+
+// Real parse/trace work now includes isolated Python worker startup.
+configure({ asyncUtilTimeout: 12_000 });
 
 // Mock only the canvas/measurement layer. The component, generated mutation,
 // multipart serialization, and Python trace endpoint are all exercised for real.
@@ -96,7 +99,7 @@ function traceBody() {
   return call![1]!.body as FormData;
 }
 
-describe('target column tracing', () => {
+describe('target column tracing', { timeout: 15_000 }, () => {
   it('clicks FULL_NAME, calls the real trace endpoint, and shows BOTH source fields directly under the column', async () => {
     show();
     const column = screen.getByTestId('button-trace-field-FULL_NAME');

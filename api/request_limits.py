@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
-import json
 import os
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -73,6 +72,8 @@ class ProcessingLimitsMiddleware:
             try:
                 fcntl.flock(lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
+                os.close(lock_descriptor)
+                lock_descriptor = None
                 await _json_response(
                     scope,
                     receive,
@@ -93,6 +94,7 @@ class ProcessingLimitsMiddleware:
             )
             return
 
+        response_started = False
         try:
             content_lengths = [
                 value
@@ -100,7 +102,11 @@ class ProcessingLimitsMiddleware:
                 if name.lower() == b"content-length"
             ]
             if content_lengths:
-                if len(content_lengths) != 1 or not content_lengths[0].isdigit():
+                if (
+                    len(content_lengths) != 1
+                    or len(content_lengths[0]) > 20
+                    or not content_lengths[0].isdigit()
+                ):
                     await _json_response(
                         scope, receive, send, 400, "Invalid Content-Length header."
                     )
@@ -149,8 +155,6 @@ class ProcessingLimitsMiddleware:
                         "more_body": False,
                     }
                 return await receive()
-
-            response_started = False
 
             async def send_with_tracking(message: dict[str, Any]) -> None:
                 nonlocal response_started

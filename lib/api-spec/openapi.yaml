@@ -92,8 +92,8 @@ paths:
     get:
       operationId: getHealth
       tags: [health]
-      summary: Health check
-      description: Returns API health status
+      summary: Liveness check
+      description: Returns API process liveness, not processing readiness
       responses:
         "200":
           description: Healthy
@@ -110,6 +110,25 @@ paths:
       responses:
         "200":
           description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /ready:
+    get:
+      operationId: getReadiness
+      tags: [health]
+      summary: Processing readiness check
+      description: Checks parser dependencies and the bundled sample independently of liveness
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+        "503":
+          description: Required dependency or bundled sample unavailable
           content:
             application/json:
               schema:

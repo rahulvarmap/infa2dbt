@@ -19,13 +19,13 @@ Install the frontend dependencies with `pnpm install`. Install the API
 dependencies with:
 
 ```sh
-python3.11 -m pip install -r artifacts/infa2dbt/api/requirements.txt
+bash scripts/install-infa2dbt-python-deps.sh
 ```
 
 Start the FastAPI service and Vite frontend in separate terminals:
 
 ```sh
-PORT=8080 python artifacts/infa2dbt/api/serve.py
+PORT=8080 bash scripts/run-infa2dbt-api.sh
 ```
 
 ```sh
@@ -65,11 +65,12 @@ curl -F file=@samples/m_member_enrollment.xml http://localhost:8080/parse
 
 ## Tests
 
-Install the root Python dependencies with `uv sync` (including `pytest` and the
-HTTP test client), then run from the project root:
+The single locked requirements file includes runtime, test, and transitive
+dependencies. Install it, then run from the project root:
 
 ```sh
-python -m pytest api/tests -q
+bash scripts/install-infa2dbt-python-deps.sh
+PYTHONPATH="$PWD/.pythonlibs/lib/python3.11/site-packages" python3 -m pytest api/tests -q
 ```
 
 The sample must contain 1 source, 1 target, 3 transformations, 5 instances,
@@ -80,9 +81,12 @@ multiple folders/mappings, unsafe entities, cycles, upload limits, and sample ro
 
 ## Build and run the production app
 
+The managed artifact builds install the same locked Python requirements. The web
+build also creates Vite assets. No database setup or schema push is required.
+
 ```sh
-PORT=24518 BASE_PATH=/ pnpm --filter @workspace/infa2dbt run build
-PORT=8000 python artifacts/infa2dbt/api/serve.py
+bash scripts/build-infa2dbt-web.sh
+PORT=8000 bash scripts/run-infa2dbt-api.sh
 ```
 
 After the frontend build, FastAPI serves the static app from

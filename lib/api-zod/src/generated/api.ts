@@ -230,8 +230,8 @@ export const ParseSampleResponse = zod.object({
 
 
 /**
- * Returns API health status
- * @summary Health check
+ * Returns API process liveness, not processing readiness
+ * @summary Liveness check
  */
 export const GetHealthResponse = zod.object({
   "status": zod.string()
@@ -243,6 +243,15 @@ export const GetHealthResponse = zod.object({
  * @summary Health check
  */
 export const HealthCheckResponse = zod.object({
+  "status": zod.string()
+})
+
+
+/**
+ * Checks parser dependencies and the bundled sample independently of liveness
+ * @summary Processing readiness check
+ */
+export const GetReadinessResponse = zod.object({
   "status": zod.string()
 })
 

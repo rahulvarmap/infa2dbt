@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -37,6 +38,14 @@ async def health() -> dict[str, str]:
 @app.get("/ready")
 @app.get("/api/ready")
 async def readiness() -> JSONResponse:
+    try:
+        importlib.import_module("api.parser")
+        importlib.import_module("api.parser.lineage")
+    except ImportError:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "checks": {"dependencies": "unavailable"}},
+        )
     sample = sample_files().get("m_member_enrollment.xml")
     if sample is None or sample.stat().st_size > MAX_FILE_SIZE:
         return JSONResponse(
@@ -107,7 +116,7 @@ async def read_xml_upload(
 
         if require_file and filename is None:
             return JSONResponse(
-                status_code=400,
+                status_code=422,
                 content={"error": "Provide one XML file in the multipart field named 'file'."},
             )
         return filename, contents, fields
@@ -161,7 +170,7 @@ async def process_in_worker(
     except asyncio.CancelledError:
         if process is not None and process.returncode is None:
             process.kill()
-            await process.wait()
+            await process.communicate()
         raise
     except (OSError, ValueError, json.JSONDecodeError):
         return JSONResponse(status_code=500, content={"error": "XML processing failed."})
@@ -216,10 +225,10 @@ async def trace_lineage(request: Request) -> JSONResponse:
     )
     if isinstance(upload, JSONResponse):
         return upload
-    filename, file_contents, fields = upload
+    _, file_contents, fields = upload
     if "target_instance" not in fields or "target_field" not in fields:
         return JSONResponse(
-            status_code=400,
+            status_code=422,
             content={"error": "Provide target_instance and target_field."},
         )
     sample_name = fields.get("sample_name")
