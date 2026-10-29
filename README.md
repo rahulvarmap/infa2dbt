@@ -5,8 +5,11 @@ sources, targets, mappings, transformations, ports, instances, and connectors.
 Review the Summary, Ports, and collapsible Raw JSON tabs, or try a bundled sample.
 Use synthetic/sample exports only; do not upload proprietary data. Multipart uploads
 may be temporarily spooled to disk and are closed and cleaned up after each request.
-Request bodies and processing time are bounded; no durable upload storage is used.
-There is no LLM, database, authentication, or dbt code generation in Phase 1.
+Validation uses generated synthetic rows in a temporary DuckDB file, which is removed
+after the request. Request bodies and processing time are bounded; no durable upload
+storage or persistent database is used. There is no LLM or authentication.
+Download the standalone Snowflake dbt project, or validate the supported subset locally
+with DuckDB.
 
 ## Requirements
 
@@ -43,6 +46,10 @@ The FastAPI routes below are also available with an `/api` prefix:
 - `GET /samples`: filename and size for each XML file in the root `samples/` directory.
 - `POST /samples/{filename}/parse`: parse a bundled sample without uploading it.
 - `POST /lineage/trace`: trace a target field from one uploaded XML file or bundled sample.
+- `POST /dbt/project`: generate and download a deterministic Snowflake dbt project ZIP.
+- `POST /dbt/validate`: create synthetic source tables, run `dbt compile`, then `dbt run`
+  with DuckDB, and return pipeline and per-model results. Validation failures are reported
+  in the response rather than hidden.
 
 Upload and trace requests accept at most one file and a 5 MiB XML file. The whole
 multipart body is capped at 5 MiB plus form overhead; parse requests over 50
@@ -78,6 +85,20 @@ and 35 connectors, ordered as:
 `MEMBER_ENROLLMENT → SQ_MEMBER_ENROLLMENT → EXP_MEMBER_DERIVE → FIL_ACTIVE_MEMBERS → DIM_MEMBER`.
 Additional tests cover mixed-case tags/attributes, unknown/reusable transformations,
 multiple folders/mappings, unsafe entities, cycles, upload limits, and sample routes.
+Generator tests cover every bundled sample, Snowflake project parsing, DuckDB compile/run,
+and golden result values for expression functions, date boundaries, NULL concatenation,
+source filters, and Filter transformations.
+
+## Compare results on a Snowflake trial
+
+Create a trial database and warehouse, create/load source tables matching `models/sources.yml`, and
+load the same synthetic rows used for DuckDB validation if you want an apples-to-apples
+comparison. Edit the generated `profiles.yml` with your trial account details. Keep
+credentials out of source control; the generated instructions show how to read the
+password from a local environment variable. Then run `dbt debug --profiles-dir .`,
+`dbt parse --profiles-dir .`, and `dbt run --profiles-dir .` with
+`source_database` and `source_schema` variables set to your source tables. Compare the
+generated target views with the DuckDB validation results.
 
 ## Build and run the production app
 

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import csv
 import json
 import os
+import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -85,14 +85,46 @@ def synthetic_seed_rows(source: Source, reference: date | None = None) -> list[l
     ]
 
 
-def _write_seed(root: Path, seed: SeedTable, reference: date) -> None:
-    seed_path = root / "seeds" / seed.filename
-    seed_path.parent.mkdir(parents=True, exist_ok=True)
-    fields = seed.source.fields
-    with seed_path.open("w", newline="", encoding="utf-8") as output:
-        writer = csv.writer(output, lineterminator="\n")
-        writer.writerow([field.name for field in fields])
-        writer.writerows(synthetic_seed_rows(seed.source, reference))
+def _quote_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _load_synthetic_sources(
+    workspace: Path,
+    seed_tables: list[SeedTable],
+    reference: date,
+) -> None:
+    connection = duckdb.connect(str(workspace / "validation.duckdb"))
+    try:
+        for seed in seed_tables:
+            fields_by_name: dict[str, tuple[int, Field]] = {}
+            for index, field in enumerate(seed.source.fields):
+                fields_by_name.setdefault(normalize_identifier(field.name), (index, field))
+            selected = list(fields_by_name.values())
+            table = f"main.{_quote_identifier(seed.identifier)}"
+            if selected:
+                columns = ", ".join(
+                    f"{_quote_identifier(field.name)} VARCHAR"
+                    for _, field in selected
+                )
+            else:
+                columns = '"_validation_dummy" VARCHAR'
+            connection.execute(f"CREATE TABLE {table} ({columns})")
+            rows = synthetic_seed_rows(seed.source, reference)
+            if not selected:
+                values = [(None,) for _ in rows]
+            else:
+                values = [
+                    tuple(row[index] for index, _field in selected)
+                    for row in rows
+                ]
+            placeholders = ", ".join("?" for _ in range(len(values[0])))
+            connection.executemany(
+                f"INSERT INTO {table} VALUES ({placeholders})",
+                values,
+            )
+    finally:
+        connection.close()
 
 
 def prepare_validation_workspace(
@@ -103,13 +135,27 @@ def prepare_validation_workspace(
     """Write a DuckDB-specific project and synthetic seeds into an empty directory."""
     workspace.mkdir(parents=True, exist_ok=True)
     project = build_project(result, dialect="duckdb")
+    profile = project.files.get("profiles.yml")
+    if profile is not None:
+        relative_path = "      path: validation.duckdb\n"
+        if relative_path not in profile:
+            raise ValueError("DuckDB validation profile is missing its database path.")
+        project.files["profiles.yml"] = profile.replace(
+            relative_path,
+            f"      path: {json.dumps(str((workspace / 'validation.duckdb').resolve()))}\n",
+            1,
+        )
     for relative_path, content in project.files.items():
         destination = workspace / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(content, encoding="utf-8")
-    reference_date = reference_date or datetime.now(timezone.utc).date()
-    for seed in project.seed_tables:
-        _write_seed(workspace, seed, reference_date)
+    if reference_date is None:
+        current = duckdb.connect(":memory:")
+        try:
+            reference_date = current.execute("SELECT CURRENT_DATE").fetchone()[0]
+        finally:
+            current.close()
+    _load_synthetic_sources(workspace, project.seed_tables, reference_date)
     return project
 
 
@@ -123,7 +169,6 @@ def _run_dbt(runner: Any, workspace: Path, command: str) -> Any:
             str(workspace),
             "--target-path",
             str(workspace / "target"),
-            "--no-partial-parse",
             "--quiet",
         ],
     )
@@ -174,18 +219,28 @@ def execute_validation_workspace(
     project: DbtProject,
 ) -> dict[str, Any]:
     """Seed, compile, and run models, reporting each model's final status."""
+    os.environ.setdefault("DBT_SEND_ANONYMOUS_USAGE_STATS", "false")
+    api_package_directory = Path(__file__).resolve().parents[1]
+    sys.path[:] = [
+        entry for entry in sys.path
+        if Path(entry or os.curdir).resolve() != api_package_directory
+    ]
     from dbt.cli.main import dbtRunner
 
     runner = dbtRunner()
     steps = [
-        _step("seed"),
+        {
+            **_step("seed"),
+            "status": "passed",
+            "message": "Synthetic source rows loaded into DuckDB.",
+        },
         _step("compile"),
         _step("run"),
     ]
     models = _model_descriptors(project)
     active_models = [model for model in models if model["status"] != "blocked"]
 
-    for index, step in enumerate(steps):
+    for step in steps[1:]:
         previous_cwd = Path.cwd()
         try:
             os.chdir(workspace)
@@ -210,7 +265,7 @@ def execute_validation_workspace(
             "compile": "dbt compiled the generated models.",
             "run": "dbt executed the generated models.",
         }[step["name"]]
-        if index == 2:
+        if step["name"] == "run":
             _apply_run_results(workspace, active_models)
 
     status = (
