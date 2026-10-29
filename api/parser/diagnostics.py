@@ -3,6 +3,7 @@
 from collections import Counter
 
 from .capabilities import capability_for
+from .expressions import ExpressionSyntaxError, parse_expression, unknown_function_calls
 from .identifiers import normalize_identifier, normalize_type_name
 from .models import Diagnostic, Mapping, ParseResult
 from .order import topological_order
@@ -130,6 +131,35 @@ def validate_mapping(mapping: Mapping, identity: str) -> list[Diagnostic]:
                     capability.message,
                     instance=instance.name,
                 )
+            variable_ports = [
+                port.name for port in ports
+                if "VARIABLE" in port.porttype.upper()
+            ]
+            for port in ports:
+                if not port.expression:
+                    continue
+                try:
+                    expression = parse_expression(
+                        port.expression,
+                        variable_ports=variable_ports,
+                    )
+                except ExpressionSyntaxError as error:
+                    add(
+                        "error",
+                        "INVALID_EXPRESSION",
+                        str(error),
+                        instance=instance.name,
+                        field=port.name,
+                    )
+                    continue
+                for function in unknown_function_calls(expression):
+                    add(
+                        "warning",
+                        "UNKNOWN_EXPRESSION_FUNCTION",
+                        f"Function '{function.name}' is not registered; its argument references are followed as best-effort.",
+                        instance=instance.name,
+                        field=port.name,
+                    )
 
     for connector in mapping.connectors:
         endpoints = (

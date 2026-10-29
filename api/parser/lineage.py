@@ -1,7 +1,6 @@
 """Instance graphs and deterministic, target-to-source field lineage."""
 
 import json
-import re
 from collections import defaultdict
 
 import networkx as nx
@@ -12,6 +11,11 @@ from .models import (
 from .identifiers import normalize_identifier, normalize_type_name
 from .order import topological_order
 from .diagnostics import mapping_identity
+from .expressions import (
+    ExpressionSyntaxError,
+    iter_port_references,
+    parse_expression,
+)
 
 
 def mapping_key(mapping: Mapping, mappings: list[Mapping]) -> str:
@@ -126,23 +130,33 @@ class LineageGraph:
             upstream = []
             port_type = getattr(port, "porttype", "").upper() if port else ""
             if port and expression and ("OUTPUT" in port_type or "VARIABLE" in port_type):
-                # Quoted literals are values, not references to similarly named ports.
-                code = re.sub(r"'(?:''|[^'])*'", " ", expression)
-                references = []
-                for candidate in ports.values():
-                    candidate_type = getattr(candidate, "porttype", "").upper()
-                    if "INPUT" not in candidate_type and "VARIABLE" not in candidate_type:
-                        continue
-                    match = re.search(
-                        rf"(?<!\w){re.escape(candidate.name)}(?!\w)", code, re.IGNORECASE
+                variable_ports = [
+                    candidate.name for candidate in ports.values()
+                    if "VARIABLE" in getattr(candidate, "porttype", "").upper()
+                ]
+                try:
+                    expression_ast = parse_expression(
+                        expression,
+                        variable_ports=variable_ports,
                     )
-                    if match:
-                        references.append((match.start(), candidate))
-                for _, candidate in sorted(references, key=lambda item: item[0]):
-                    if normalize_identifier(candidate.name) == normalize_identifier(field):
-                        upstream.extend(self.incoming[identity])
-                    else:
-                        upstream.append((name, candidate.name))
+                    references = iter_port_references(expression_ast)
+                    for reference in references:
+                        candidate = ports.get(normalize_identifier(reference.name))
+                        if candidate is None:
+                            continue
+                        candidate_type = getattr(candidate, "porttype", "").upper()
+                        if (
+                            normalize_identifier(candidate.name) == normalize_identifier(field)
+                            and "INPUT" in candidate_type
+                            and "OUTPUT" in candidate_type
+                        ):
+                            upstream.extend(self.incoming[identity])
+                        else:
+                            upstream.append((name, candidate.name))
+                except ExpressionSyntaxError:
+                    # Invalid expressions have a structured diagnostic; retain
+                    # only the explicit connector path as a conservative fallback.
+                    upstream.extend(self.incoming[identity])
             else:
                 upstream.extend(self.incoming[identity])
             stack.append((name, field, True))
