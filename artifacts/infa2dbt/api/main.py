@@ -253,9 +253,8 @@ async def download_dbt_project(request: Request) -> Response:
         return result
     try:
         payload = json.loads(result.body)
-        content = payload["content"]
-        archive = base64.b64decode(content["zip_base64"], validate=True)
-        filename = content["filename"]
+        archive = base64.b64decode(payload["zip_base64"], validate=True)
+        filename = payload["filename"]
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return JSONResponse(
             status_code=500,

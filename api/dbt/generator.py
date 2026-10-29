@@ -37,6 +37,7 @@ from api.parser.models import (
 )
 from api.parser.order import topological_order
 
+from .dependency_lock import DBT_REQUIREMENTS_LOCK
 from .dialects.snowflake import (
     UnsupportedSnowflakeFunction,
     UnsupportedSnowflakeType,
@@ -50,7 +51,7 @@ from .dialects.snowflake import (
 
 
 DBT_CORE_VERSION = "1.12.6"
-DBT_SNOWFLAKE_VERSION = "1.12.3"
+DBT_SNOWFLAKE_VERSION = "1.12.4"
 PROJECT_NAME = "infa2dbt_snowflake"
 SUPPORTED_TRANSFORMATIONS = {"source qualifier", "expression", "filter"}
 
@@ -86,9 +87,9 @@ class _Block:
 
 
 class _GenerationBlocked(Exception):
-    def __init__(self, block: _Block):
-        super().__init__(block.message)
-        self.block = block
+    def __init__(self, blocks: _Block | list[_Block]):
+        self.blocks = [blocks] if isinstance(blocks, _Block) else blocks
+        super().__init__(self.blocks[0].message)
 
 
 def snake_case(value: str) -> str:
@@ -103,6 +104,10 @@ def snake_case(value: str) -> str:
 
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
+
+
+def _jinja_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _unique_names(items: list[tuple[str, str]]) -> dict[str, str]:
@@ -236,11 +241,14 @@ class _ProjectBuilder:
             )
             for identity, source in sources.items()
         }
-        group_names = _unique_names([
-            (group_key, f"src_{snake_case(source.repository)}_{snake_case(source.folder)}")
-            for identity, source in sources.items()
-            for group_key in [group_keys[identity]]
-        ])
+        group_bases = {}
+        for identity, source in sources.items():
+            group_key = group_keys[identity]
+            group_bases.setdefault(
+                group_key,
+                f"src_{snake_case(source.repository)}_{snake_case(source.folder)}",
+            )
+        group_names = _unique_names(list(group_bases.items()))
         stage_candidates = [
             (
                 identity,
@@ -364,7 +372,7 @@ class _ProjectBuilder:
                     f"{{{{ config(materialized='view') }}}}\n\n"
                     "select\n"
                     f"{columns}\n"
-                    f"from {{{{ source('{info.group_name}', '{source.name}') }}}} as src\n"
+                    f"from {{{{ source({_jinja_string(info.group_name)}, {_jinja_string(source.name)}) }}}} as src\n"
                 )
 
     def _source_yml(self) -> str:
@@ -372,6 +380,8 @@ class _ProjectBuilder:
         for info in self.source_info.values():
             groups[info.group_name].append(info)
         lines = ["version: 2", "", "sources:"]
+        if not groups:
+            return "version: 2\n\nsources: []\n"
         for group, infos in sorted(groups.items()):
             sample = infos[0].source
             lines.extend([
@@ -400,6 +410,8 @@ class _ProjectBuilder:
             (entry["model"], entry["target_name"], entry["fields"], "target")
             for entry in target_entries
         ]
+        if not all_entries:
+            return "version: 2\n\nmodels: []\n"
         for name, origin, fields, kind in sorted(all_entries, key=lambda item: item[0]):
             lines.extend([
                 f"  - name: {json.dumps(name)}",
@@ -459,14 +471,16 @@ class _ProjectBuilder:
             f"dbt-core=={DBT_CORE_VERSION}\n"
             f"dbt-snowflake=={DBT_SNOWFLAKE_VERSION}\n"
         )
+        self.files["requirements.lock"] = DBT_REQUIREMENTS_LOCK
         self.files["README.md"] = (
             "# Generated Snowflake dbt project\n\n"
             "Generated models use views by default. Review `diagnostics.json` before running "
             "the project; blocked models are intentionally non-functional placeholders.\n\n"
             "Copy `profiles.yml` to your local dbt profiles directory and replace every "
             "placeholder with your own Snowflake connection values. Do not commit credentials.\n\n"
-            "Install the pinned adapter with `python -m pip install -r requirements.txt`, "
-            "then run `dbt parse` from this project directory.\n"
+            "Install the fully pinned environment with `python -m pip install -r requirements.lock`. "
+            "`requirements.txt` lists the direct dbt dependencies. "
+            "Run `dbt parse` from this project directory.\n"
         )
 
     def _mapping_relations(
@@ -596,7 +610,7 @@ class _ProjectBuilder:
             if type_name == "source qualifier":
                 blocks = _source_qualifier_blocks(transformation)
                 if blocks:
-                    raise _GenerationBlocked(blocks[0])
+                    raise _GenerationBlocked(blocks)
 
             parent_keys = sorted(set(parents.get(instance_key, [])))
             if len(parent_keys) > 1:
@@ -955,7 +969,7 @@ class _ProjectBuilder:
                         mapping, mapping_key, instance, model_name, path
                     )
                 except _GenerationBlocked as error:
-                    blocks.append(error.block)
+                    blocks.extend(error.blocks)
                 else:
                     self.files[path] = sql
 

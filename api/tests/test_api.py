@@ -1,4 +1,7 @@
 import asyncio
+import json
+import zipfile
+from io import BytesIO
 
 import httpx
 import pytest
@@ -147,3 +150,35 @@ def test_multi_mapping_graph_and_trace_disambiguation():
     assert response.json()["mapping"] == "second_mapping"
     source_fields = {h["port"] for h in response.json()["hops"] if h["type"] == "Source"}
     assert source_fields == {"FIRST_NAME", "LAST_NAME"}
+
+
+def test_generate_dbt_project_from_sample_returns_partial_project_zip():
+    response = request(
+        "POST",
+        "/api/dbt/project",
+        data={"sample_name": SAMPLE.name},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/zip")
+    with zipfile.ZipFile(BytesIO(response.content)) as archive:
+        assert "models/sources.yml" in archive.namelist()
+        assert "models/schema.yml" in archive.namelist()
+        assert "dbt_project.yml" in archive.namelist()
+        diagnostics = json.loads(archive.read("diagnostics.json"))
+        assert diagnostics["blocked_models"][0]["name"] == "dim_member"
+        target = archive.read("models/marts/dim_member.sql").decode()
+        assert target.startswith("-- BLOCKED MODEL: dim_member")
+        assert "SOURCE_QUALIFIER_SOURCE_FILTER" in target
+
+
+def test_generate_dbt_project_from_upload():
+    response = request(
+        "POST",
+        "/dbt/project",
+        files={"file": (SAMPLE.name, SAMPLE.read_bytes(), "text/xml")},
+    )
+    assert response.status_code == 200
+    with zipfile.ZipFile(BytesIO(response.content)) as archive:
+        assert "models/staging/stg_member_enrollment.sql" in archive.namelist()
+        assert "requirements.txt" in archive.namelist()
+        assert "dbt-core==1.12.6" in archive.read("requirements.txt").decode()
