@@ -1,5 +1,6 @@
 from lxml import etree
 
+from .identifiers import normalize_identifier, normalize_type_name
 from .models import Connector, Field, Instance, Mapping, ParseResult, Port, Source, Target, Transformation
 
 
@@ -77,7 +78,10 @@ def parse_powercenter_xml(xml_bytes: bytes) -> ParseResult:
             ]
             result.sources.extend(sources)
             result.targets.extend(targets)
-            reusable = {_attrs(node).get("NAME", ""): node for node in _children(folder, "TRANSFORMATION")}
+            reusable = {
+                normalize_identifier(_attrs(node).get("NAME", "")): node
+                for node in _children(folder, "TRANSFORMATION")
+            }
             for node in _children(folder, "MAPPING"):
                 instances = []
                 for instance in _children(node, "INSTANCE"):
@@ -88,21 +92,22 @@ def parse_powercenter_xml(xml_bytes: bytes) -> ParseResult:
                         transformation_type=attrs.get("TRANSFORMATION_TYPE", ""),
                     ))
                 source_names = {
-                    item.transformation_name or item.name for item in instances
-                    if item.type.casefold() in {"source", "source definition"}
-                    or item.transformation_type.casefold() == "source definition"
+                    normalize_identifier(item.transformation_name or item.name) for item in instances
+                    if normalize_type_name(item.type) in {"source", "source definition"}
+                    or normalize_type_name(item.transformation_type) == "source definition"
                 }
                 target_names = {
-                    item.transformation_name or item.name for item in instances
-                    if item.type.casefold() in {"target", "target definition"}
-                    or item.transformation_type.casefold() == "target definition"
+                    normalize_identifier(item.transformation_name or item.name) for item in instances
+                    if normalize_type_name(item.type) in {"target", "target definition"}
+                    or normalize_type_name(item.transformation_type) == "target definition"
                 }
                 transformations = [_transformation(child) for child in _children(node, "TRANSFORMATION")]
-                known = {item.name for item in transformations}
+                known = {normalize_identifier(item.name) for item in transformations}
                 for instance in instances:
-                    if instance.transformation_name in reusable and instance.transformation_name not in known:
-                        transformations.append(_transformation(reusable[instance.transformation_name]))
-                        known.add(instance.transformation_name)
+                    reusable_key = normalize_identifier(instance.transformation_name)
+                    if reusable_key in reusable and reusable_key not in known:
+                        transformations.append(_transformation(reusable[reusable_key]))
+                        known.add(reusable_key)
                 connectors = []
                 for connector in _children(node, "CONNECTOR"):
                     attrs = _attrs(connector)
@@ -114,8 +119,8 @@ def parse_powercenter_xml(xml_bytes: bytes) -> ParseResult:
                     ))
                 result.mappings.append(Mapping(
                     name=_attrs(node).get("NAME", ""), **context,
-                    sources=[item for item in sources if item.name in source_names],
-                    targets=[item for item in targets if item.name in target_names],
+                    sources=[item for item in sources if normalize_identifier(item.name) in source_names],
+                    targets=[item for item in targets if normalize_identifier(item.name) in target_names],
                     transformations=transformations, instances=instances, connectors=connectors,
                     attributes=_attributes(node),
                 ))

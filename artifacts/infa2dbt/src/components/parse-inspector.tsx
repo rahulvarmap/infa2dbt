@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { ParseResponse } from '@workspace/api-client-react';
 import { LineageView } from '@/components/lineage/lineage-view';
-import { orderKey, type ParsedSource } from '@/components/lineage/lineage-utils';
+import { normalizeIdentifier, orderKey, type ParsedSource } from '@/components/lineage/lineage-utils';
 
 type Tab = 'lineage' | 'summary' | 'ports' | 'raw';
 
@@ -12,6 +12,12 @@ export function ParseInspector({ data, label, source }: { data: ParseResponse; l
   const [rawOpen, setRawOpen] = useState(false);
   const mapping = data.mappings[Math.min(mapIdx, data.mappings.length - 1)];
   const order = mapping ? data.execution_order[orderKey(data, mapping)] ?? [] : [];
+  const mappingId = mapping ? orderKey(data, mapping) : null;
+  const diagnostics = (data.diagnostics ?? []).filter((item) => (
+    mappingId
+      ? normalizeIdentifier(item.mapping) === normalizeIdentifier(mappingId)
+      : !item.mapping
+  ));
   const transformation = mapping?.transformations[Math.min(tIdx, mapping.transformations.length - 1)];
   const json = useMemo(() => JSON.stringify(data, null, 2), [data]);
 
@@ -30,6 +36,30 @@ export function ParseInspector({ data, label, source }: { data: ParseResponse; l
           <button key={t} role="tab" type="button" aria-selected={tab === t} className="tab" data-active={tab === t} onClick={() => setTab(t)} data-testid={`tab-${t}`}>{t}</button>
         ))}
       </div>
+      <section className="mapping-diagnostics" aria-labelledby="mapping-diagnostics-title" data-testid="panel-mapping-diagnostics">
+        <div className="diagnostics-head">
+          <h3 id="mapping-diagnostics-title">{mapping ? `Diagnostics · ${mapping.name}` : 'Diagnostics'}</h3>
+          <span>{diagnostics.length} {diagnostics.length === 1 ? 'item' : 'items'}</span>
+        </div>
+        {diagnostics.length ? (
+          <ul className="diagnostics-list">
+            {diagnostics.map((item, index) => (
+              <li key={`${item.code}-${index}`} data-severity={item.severity} data-testid={`diagnostic-${item.code.toLowerCase()}`}>
+                <div className="diagnostic-title">
+                  <span className="diagnostic-severity">{item.severity}</span>
+                  <code>{item.code}</code>
+                </div>
+                <p>{item.message}</p>
+                {(item.instance || item.field) && (
+                  <small>{[item.instance, item.field].filter(Boolean).join(' · ')}</small>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="diagnostics-empty">No diagnostics for this mapping.</p>
+        )}
+      </section>
       {!mapping && tab !== 'raw' ? <p className="drop-caption">No mappings found in this file.</p> : null}
       {mapping && tab === 'lineage' && (
         <div data-testid="panel-lineage"><LineageView data={data} mapping={mapping} source={source} /></div>

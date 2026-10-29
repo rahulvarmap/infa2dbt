@@ -1052,6 +1052,21 @@ input:focus-visible,
 @media (max-width: 899px) { .lg-panel { max-height: none; } }
 @keyframes lg-in { from { opacity: 0; transform: translateY(4px); } }
 .lg-panel-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; margin-bottom: 10px; }
+.mapping-diagnostics { margin: 0 0 18px; padding: 12px 14px; border: 1px solid hsl(var(--border)); border-radius: 9px; background: hsl(var(--card)); }
+.diagnostics-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 12px; margin-bottom: 8px; }
+.diagnostics-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.diagnostics-head > span, .diagnostics-empty { color: hsl(var(--muted-foreground)); font-size: 11px; }
+.diagnostics-list { display: grid; gap: 8px; list-style: none; margin: 0; padding: 0; }
+.diagnostics-list li { min-width: 0; padding: 9px 10px; border: 1px solid hsl(var(--border)); border-radius: 7px; }
+.diagnostic-title { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.diagnostic-title code { font-family: var(--app-font-mono); font-size: 10px; overflow-wrap: anywhere; }
+.diagnostic-severity { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+.diagnostics-list li[data-severity='error'] .diagnostic-severity { color: hsl(var(--destructive)); }
+.diagnostics-list li[data-severity='warning'] .diagnostic-severity { color: hsl(var(--primary)); }
+.diagnostics-list p { margin: 5px 0 0; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.diagnostics-list small { display: block; margin-top: 5px; color: hsl(var(--muted-foreground)); font-family: var(--app-font-mono); font-size: 10px; overflow-wrap: anywhere; }
+.diagnostics-empty { margin: 0; }
+@media (max-width: 640px) { .mapping-diagnostics { padding: 10px; } }
 .lg-panel-title { margin: 6px 0 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
 .lg-chip { display: inline-block; padding: 2px 7px; border-radius: 5px; background: hsl(var(--k) / 0.12); color: hsl(var(--k)); font-family: var(--app-font-mono); font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase; }
 .lg-close { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 7px; background: transparent; color: hsl(var(--muted-foreground)); cursor: pointer; flex: 0 0 auto; }

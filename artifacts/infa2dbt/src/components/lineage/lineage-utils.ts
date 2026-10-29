@@ -35,8 +35,12 @@ export function kindLabel(kind: Kind) {
   return KINDS.find((k) => k.kind === kind)?.label ?? 'Unknown';
 }
 
+export function normalizeIdentifier(value: string) {
+  return value.toLowerCase();
+}
+
 export function orderKey(data: ParseResponse, m: Mapping) {
-  const dup = data.mappings.filter((x) => x.name === m.name).length > 1;
+  const dup = data.mappings.filter((x) => normalizeIdentifier(x.name) === normalizeIdentifier(m.name)).length > 1;
   return dup ? `${m.repository}/${m.folder}/${m.name}` : m.name;
 }
 
@@ -61,22 +65,28 @@ export function layoutGraph(nodes: LineageNode[], edges: LineageEdge[]) {
 export type PortRow = { name: string; datatype: string; porttype: string; expression: string };
 
 export function resolvePorts(mapping: Mapping, instanceName: string, nodeType: string): { rows: PortRow[]; fromConnectors: boolean } {
-  const inst = mapping.instances.find((i) => i.name === instanceName);
+  const instanceKey = normalizeIdentifier(instanceName);
+  const inst = mapping.instances.find((i) => normalizeIdentifier(i.name) === instanceKey);
   const tname = inst?.transformation_name || instanceName;
+  const definitionKey = normalizeIdentifier(tname);
   const k = kindOf(nodeType);
   const fmt = (d: string, p: string, s: string) => `${d}${p ? `(${p}${s && s !== '0' ? `,${s}` : ''})` : ''}`;
   if (k === 'source' || k === 'target') {
     const list = k === 'source' ? mapping.sources : mapping.targets;
-    const def = list.find((x) => x.name === tname);
+    const def = list.find((x) => normalizeIdentifier(x.name) === definitionKey);
     if (def) return { rows: def.fields.map((f) => ({ name: f.name, datatype: fmt(f.datatype, f.precision, f.scale), porttype: k === 'source' ? 'OUTPUT' : 'INPUT', expression: '' })), fromConnectors: false };
   } else {
-    const t = mapping.transformations.find((x) => x.name === tname);
+    const t = mapping.transformations.find((x) => normalizeIdentifier(x.name) === definitionKey);
     if (t) return { rows: t.ports.map((p) => ({ name: p.name, datatype: fmt(p.datatype, p.precision, p.scale), porttype: p.porttype, expression: p.expression })), fromConnectors: false };
   }
   const seen = new Map<string, PortRow>();
   mapping.connectors.forEach((c) => {
-    if (c.to_instance === instanceName && !seen.has(c.to_field)) seen.set(c.to_field, { name: c.to_field, datatype: '', porttype: 'INPUT', expression: '' });
-    if (c.from_instance === instanceName && !seen.has(c.from_field)) seen.set(c.from_field, { name: c.from_field, datatype: '', porttype: 'OUTPUT', expression: '' });
+    if (normalizeIdentifier(c.to_instance) === instanceKey && !seen.has(normalizeIdentifier(c.to_field))) {
+      seen.set(normalizeIdentifier(c.to_field), { name: c.to_field, datatype: '', porttype: 'INPUT', expression: '' });
+    }
+    if (normalizeIdentifier(c.from_instance) === instanceKey && !seen.has(normalizeIdentifier(c.from_field))) {
+      seen.set(normalizeIdentifier(c.from_field), { name: c.from_field, datatype: '', porttype: 'OUTPUT', expression: '' });
+    }
   });
   return { rows: [...seen.values()], fromConnectors: true };
 }

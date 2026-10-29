@@ -1,6 +1,6 @@
 import pytest
 
-from api.parser import parse_powercenter_xml
+from api.parser import parse_powercenter_xml, topological_order
 from api.parser.lineage import LineageGraph, build_lineage, trace_field
 from api.parser.models import Connector, Instance, Mapping, Port, Transformation
 from api.tests.test_parser import SAMPLE
@@ -106,6 +106,56 @@ def test_internal_expression_cycle_is_reported():
     )
     with pytest.raises(ValueError, match="Cycle detected in field lineage"):
         trace_field(mapping, "exp", "a")
+
+
+def test_local_variable_expression_chain_reaches_source():
+    xml = b"""<POWERMART><REPOSITORY NAME="r"><FOLDER NAME="f">
+      <SOURCE NAME="S"><SOURCEFIELD NAME="A" DATATYPE="string"/></SOURCE>
+      <TARGET NAME="T"><TARGETFIELD NAME="B" DATATYPE="string"/></TARGET>
+      <MAPPING NAME="local_variables">
+        <TRANSFORMATION NAME="E" TYPE="Expression">
+          <TRANSFORMFIELD NAME="A" PORTTYPE="INPUT" DATATYPE="string"/>
+          <TRANSFORMFIELD NAME="v" PORTTYPE="VARIABLE" DATATYPE="string" EXPRESSION="A"/>
+          <TRANSFORMFIELD NAME="B" PORTTYPE="OUTPUT" DATATYPE="string" EXPRESSION="v"/>
+        </TRANSFORMATION>
+        <INSTANCE NAME="S" TYPE="Source Definition" TRANSFORMATION_NAME="S"/>
+        <INSTANCE NAME="E" TYPE="TRANSFORMATION" TRANSFORMATION_NAME="E"/>
+        <INSTANCE NAME="T" TYPE="Target Definition" TRANSFORMATION_NAME="T"/>
+        <CONNECTOR FROMINSTANCE="S" FROMFIELD="A" TOINSTANCE="E" TOFIELD="A"/>
+        <CONNECTOR FROMINSTANCE="E" FROMFIELD="B" TOINSTANCE="T" TOFIELD="B"/>
+      </MAPPING>
+    </FOLDER></REPOSITORY></POWERMART>"""
+    mapping = parse_powercenter_xml(xml).mappings[0]
+    hops = trace_field(mapping, "T", "B")
+    assert [(hop.instance, hop.port) for hop in hops] == [
+        ("T", "B"), ("E", "B"), ("E", "v"), ("E", "A"), ("S", "A"),
+    ]
+
+
+def test_identifiers_match_case_insensitively_across_definitions_connectors_and_lineage():
+    xml = b"""<POWERMART><REPOSITORY NAME="r"><FOLDER NAME="f">
+      <SOURCE NAME="SOURCE_DEF"><SOURCEFIELD NAME="A" DATATYPE="string"/></SOURCE>
+      <TARGET NAME="TARGET_DEF"><TARGETFIELD NAME="ID" DATATYPE="string"/></TARGET>
+      <MAPPING NAME="case_mapping">
+        <TRANSFORMATION NAME="EXPR_DEF" TYPE="Expression">
+          <TRANSFORMFIELD NAME="A" PORTTYPE="INPUT" DATATYPE="string"/>
+          <TRANSFORMFIELD NAME="O" PORTTYPE="OUTPUT" DATATYPE="string" EXPRESSION="a"/>
+        </TRANSFORMATION>
+        <INSTANCE NAME="s" TYPE="source definition" TRANSFORMATION_NAME="source_def"/>
+        <INSTANCE NAME="e" TYPE="transformation" TRANSFORMATION_NAME="expr_def"/>
+        <INSTANCE NAME="t" TYPE="target definition" TRANSFORMATION_NAME="target_def"/>
+        <CONNECTOR FROMINSTANCE="S" FROMFIELD="a" TOINSTANCE="E" TOFIELD="A"/>
+        <CONNECTOR FROMINSTANCE="e" FROMFIELD="o" TOINSTANCE="T" TOFIELD="id"/>
+      </MAPPING>
+    </FOLDER></REPOSITORY></POWERMART>"""
+    mapping = parse_powercenter_xml(xml).mappings[0]
+    assert [item.name for item in mapping.sources] == ["SOURCE_DEF"]
+    assert [item.name for item in mapping.targets] == ["TARGET_DEF"]
+    assert topological_order(mapping) == ["s", "e", "t"]
+    hops = trace_field(mapping, "T", "ID")
+    assert [(hop.instance, hop.port) for hop in hops] == [
+        ("t", "ID"), ("e", "O"), ("e", "A"), ("s", "A"),
+    ]
 
 
 def test_long_chains_do_not_hit_recursion_limit():

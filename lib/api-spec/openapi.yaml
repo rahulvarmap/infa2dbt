@@ -29,7 +29,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ParseResponse"
         "400":
-          description: Invalid XML or cyclic mapping
+          description: Invalid XML
           content:
             application/json:
               schema:
@@ -347,7 +347,7 @@ components:
           items: {$ref: "#/components/schemas/LineageHop"}
     ParseResponse:
       type: object
-      required: [sources, targets, mappings, execution_order, lineage]
+      required: [sources, targets, mappings, execution_order, lineage, diagnostics]
       properties:
         sources:
           type: array
@@ -365,6 +365,21 @@ components:
             items: {type: string}
         lineage:
           $ref: "#/components/schemas/LineageData"
+        diagnostics:
+          type: array
+          items: {$ref: "#/components/schemas/Diagnostic"}
+    Diagnostic:
+      type: object
+      required: [severity, code, message, mapping, instance, field]
+      properties:
+        severity:
+          type: string
+          enum: [error, warning, info]
+        code: {type: string}
+        message: {type: string}
+        mapping: {type: string}
+        instance: {type: ["string", "null"]}
+        field: {type: ["string", "null"]}
     XmlUploadInput:
       type: object
       properties:

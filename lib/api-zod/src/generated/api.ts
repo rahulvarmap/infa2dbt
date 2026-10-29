@@ -111,7 +111,15 @@ export const ParseXmlResponse = zod.object({
   "to_field": zod.string()
 }))
 }))
-})
+}),
+  "diagnostics": zod.array(zod.object({
+  "severity": zod.enum(['error', 'warning', 'info']),
+  "code": zod.string(),
+  "message": zod.string(),
+  "mapping": zod.string(),
+  "instance": zod.string().nullable(),
+  "field": zod.string().nullable()
+}))
 })
 
 
@@ -225,7 +233,15 @@ export const ParseSampleResponse = zod.object({
   "to_field": zod.string()
 }))
 }))
-})
+}),
+  "diagnostics": zod.array(zod.object({
+  "severity": zod.enum(['error', 'warning', 'info']),
+  "code": zod.string(),
+  "message": zod.string(),
+  "mapping": zod.string(),
+  "instance": zod.string().nullable(),
+  "field": zod.string().nullable()
+}))
 })
 
 

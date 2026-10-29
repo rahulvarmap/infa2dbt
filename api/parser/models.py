@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Field as ModelField
+from typing import Literal
 
 
 class Field(BaseModel):
@@ -64,6 +65,15 @@ class ParseResult(BaseModel):
     mappings: list[Mapping] = ModelField(default_factory=list)
 
 
+class Diagnostic(BaseModel):
+    severity: Literal["error", "warning", "info"]
+    code: str
+    message: str
+    mapping: str
+    instance: str | None = None
+    field: str | None = None
+
+
 class LineageNode(BaseModel):
     id: str
     name: str
@@ -104,3 +114,4 @@ class TraceResponse(BaseModel):
 class ParseResponse(ParseResult):
     execution_order: dict[str, list[str]] = ModelField(default_factory=dict)
     lineage: LineageData = ModelField(default_factory=LineageData)
+    diagnostics: list[Diagnostic] = ModelField(default_factory=list)

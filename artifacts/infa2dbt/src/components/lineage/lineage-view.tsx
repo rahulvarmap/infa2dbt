@@ -8,7 +8,7 @@ import { useTraceLineage } from '@workspace/api-client-react';
 import type { Mapping, ParseResponse } from '@workspace/api-client-react';
 import { GitBranch, Route as RouteIcon, X } from 'lucide-react';
 import { FieldTrace, type TraceState } from './field-trace';
-import { KINDS, NODE_W, NODE_H, errorText, kindLabel, kindOf, layoutGraph, resolvePorts, type Kind, type ParsedSource } from './lineage-utils';
+import { KINDS, NODE_W, NODE_H, errorText, kindLabel, kindOf, layoutGraph, orderKey, resolvePorts, type Kind, type ParsedSource } from './lineage-utils';
 
 type NodeData = { name: string; type: string; kind: Kind; state: 'idle' | 'selected' | 'trace' | 'dim' };
 
@@ -31,8 +31,7 @@ export function LineageView({ data, mapping, source }: { data: ParseResponse; ma
 
 function LineageInner({ data, mapping, source }: { data: ParseResponse; mapping: Mapping; source: ParsedSource | null }) {
   const mappingKey = useMemo(() => {
-    const dup = data.mappings.filter((x) => x.name === mapping.name).length > 1;
-    return dup ? `${mapping.repository}/${mapping.folder}/${mapping.name}` : mapping.name;
+    return orderKey(data, mapping);
   }, [data, mapping]);
   const lnodes = useMemo(() => data.lineage.nodes.filter((n) => n.mapping === mappingKey), [data, mappingKey]);
   const ledges = useMemo(() => data.lineage.edges.filter((e) => e.mapping === mappingKey), [data, mappingKey]);

@@ -113,12 +113,33 @@ export interface TraceResponse {
 
 export type ParseResponseExecutionOrder = {[key: string]: string[]};
 
+export type DiagnosticSeverity = typeof DiagnosticSeverity[keyof typeof DiagnosticSeverity];
+
+
+export const DiagnosticSeverity = {
+  error: 'error',
+  warning: 'warning',
+  info: 'info',
+} as const;
+
+export interface Diagnostic {
+  severity: DiagnosticSeverity;
+  code: string;
+  message: string;
+  mapping: string;
+  /** @nullable */
+  instance: string | null;
+  /** @nullable */
+  field: string | null;
+}
+
 export interface ParseResponse {
   sources: Source[];
   targets: Target[];
   mappings: Mapping[];
   execution_order: ParseResponseExecutionOrder;
   lineage: LineageData;
+  diagnostics: Diagnostic[];
 }
 
 export interface XmlUploadInput {

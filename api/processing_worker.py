@@ -9,8 +9,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from api.parser import parse_powercenter_xml, topological_order
+from api.parser.diagnostics import validate_mapping, validate_parse_result
+from api.parser.identifiers import normalize_identifier
 from api.parser.lineage import LineageGraph, mapping_key
-from api.parser.models import LineageData, ParseResponse, TraceResponse
+from api.parser.models import Diagnostic, LineageData, ParseResponse, TraceResponse
 from api.request_limits import MAX_MAPPINGS
 
 
@@ -31,20 +33,33 @@ def process_xml_request(
         if mode == "parse":
             orders = {}
             lineage = LineageData()
+            diagnostics = validate_parse_result(result)
             for mapping in result.mappings:
                 key = mapping_key(mapping, result.mappings)
                 if key in orders:
                     raise ValueError(f"Duplicate mapping identity: {key}.")
-                orders[key] = topological_order(mapping)
-                graph = LineageGraph(mapping).as_model(
-                    key, scoped=len(result.mappings) > 1
-                )
-                lineage.nodes.extend(graph.nodes)
-                lineage.edges.extend(graph.edges)
+                mapping_diagnostics = [d for d in diagnostics if d.mapping == key]
+                if any(d.severity == "error" for d in mapping_diagnostics):
+                    continue
+                try:
+                    orders[key] = topological_order(mapping)
+                    graph = LineageGraph(mapping).as_model(
+                        key, scoped=len(result.mappings) > 1
+                    )
+                    lineage.nodes.extend(graph.nodes)
+                    lineage.edges.extend(graph.edges)
+                except ValueError as error:
+                    diagnostics.append(Diagnostic(
+                        severity="error",
+                        code="INVALID_MAPPING_GRAPH",
+                        message=str(error),
+                        mapping=key,
+                    ))
             response = ParseResponse(
                 **result.model_dump(),
                 execution_order=orders,
                 lineage=lineage,
+                diagnostics=diagnostics,
             )
             return {"status_code": 200, "content": response.model_dump()}
 
@@ -57,10 +72,11 @@ def process_xml_request(
                 for item in result.mappings
                 if (
                     selected_mapping is None
-                    or mapping_key(item, result.mappings) == selected_mapping
+                    or normalize_identifier(mapping_key(item, result.mappings))
+                    == normalize_identifier(selected_mapping)
                 )
                 and any(
-                    instance.name.casefold() == target_instance.casefold()
+                    normalize_identifier(instance.name) == normalize_identifier(target_instance)
                     for instance in item.instances
                 )
             ]
@@ -71,8 +87,11 @@ def process_xml_request(
                     "Target instance is ambiguous; provide the mapping identity."
                 )
             selected = matches[0]
+            selected_key = mapping_key(selected, result.mappings)
+            if any(d.severity == "error" for d in validate_mapping(selected, selected_key)):
+                raise ValueError(f"Mapping '{selected_key}' has validation errors; field lineage is unavailable.")
             response = TraceResponse(
-                mapping=mapping_key(selected, result.mappings),
+                mapping=selected_key,
                 hops=LineageGraph(selected).trace_field(
                     target_instance, target_field
                 ),

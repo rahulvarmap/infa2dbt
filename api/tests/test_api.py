@@ -48,8 +48,11 @@ def test_malformed_and_cycle_errors():
         b'<CONNECTOR FROMINSTANCE="DIM_MEMBER" FROMFIELD="x" TOINSTANCE="MEMBER_ENROLLMENT" TOFIELD="x"/></MAPPING>',
     )
     response = request("POST", "/parse", files={"file": ("cycle.xml", data)})
-    assert response.status_code == 400
-    assert "Cycle detected" in response.json()["error"]
+    assert response.status_code == 200
+    assert any(
+        item["code"] == "DEPENDENCY_CYCLE" and item["severity"] == "error"
+        for item in response.json()["diagnostics"]
+    )
 
 
 def test_try_sample_without_upload_and_unknown_sample():

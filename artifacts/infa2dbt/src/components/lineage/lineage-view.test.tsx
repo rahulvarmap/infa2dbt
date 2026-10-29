@@ -8,8 +8,9 @@ import { cleanup, configure, fireEvent, render, screen, waitFor, within } from '
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { setBaseUrl, type ParseResponse } from '@workspace/api-client-react';
 import type { Edge, Node } from '@xyflow/react';
+import { ParseInspector } from '../parse-inspector';
 import { LineageView } from './lineage-view';
-import type { ParsedSource } from './lineage-utils';
+import { orderKey, type ParsedSource } from './lineage-utils';
 
 // Real parse/trace work now includes isolated Python worker startup.
 configure({ asyncUtilTimeout: 12_000 });
@@ -92,6 +93,11 @@ function show(source: ParsedSource | null = sample) {
   fireEvent.click(screen.getByTestId('node-lineage-DIM_MEMBER'));
 }
 
+function showInspector(inspectorData: ParseResponse) {
+  const client = new QueryClient({ defaultOptions: { mutations: { retry: false }, queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><ParseInspector data={inspectorData} label="sample.xml" source={sample} /></QueryClientProvider>);
+}
+
 function traceBody() {
   const call = vi.mocked(fetch).mock.calls.find(([url]) => String(url).endsWith('/lineage/trace'));
   expect(call?.[0]).toBe(`${origin}/api/lineage/trace`);
@@ -161,5 +167,39 @@ describe('target column tracing', { timeout: 15_000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
     expect(within(await screen.findByTestId('list-trace-hops')).getByText('MEMBER_ENROLLMENT.LAST_NAME')).toBeTruthy();
+  });
+
+  it('shows diagnostics scoped to the selected mapping', () => {
+    const first = data.mappings[0];
+    const second = { ...first, name: 'second_mapping', folder: 'other_folder' };
+    const inspectorData: ParseResponse = {
+      ...data,
+      mappings: [first, second],
+      diagnostics: [
+        {
+          severity: 'warning',
+          code: 'FIRST_MAPPING_WARNING',
+          message: 'First mapping warning.',
+          mapping: orderKey(data, first),
+          instance: 'EXP_MEMBER_DERIVE',
+          field: 'FULL_NAME',
+        },
+        {
+          severity: 'error',
+          code: 'SECOND_MAPPING_ERROR',
+          message: 'Second mapping error.',
+          mapping: second.name,
+          instance: 'EXP_MEMBER_DERIVE',
+          field: 'FULL_NAME',
+        },
+      ],
+    };
+    showInspector(inspectorData);
+    expect(screen.getByTestId('diagnostic-first_mapping_warning')).toBeTruthy();
+    expect(screen.queryByTestId('diagnostic-second_mapping_error')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Mapping'), { target: { value: '1' } });
+    expect(screen.queryByTestId('diagnostic-first_mapping_warning')).toBeNull();
+    expect(screen.getByTestId('diagnostic-second_mapping_error')).toBeTruthy();
+    expect(screen.getByText('Diagnostics · second_mapping')).toBeTruthy();
   });
 });

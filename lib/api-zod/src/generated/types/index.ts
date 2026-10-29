@@ -7,6 +7,8 @@
  */
 
 export * from './connector';
+export * from './diagnostic';
+export * from './diagnosticSeverity';
 export * from './field';
 export * from './fieldPair';
 export * from './healthStatus';

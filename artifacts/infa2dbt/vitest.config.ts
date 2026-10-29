@@ -1,11 +1,15 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
+import path from 'node:path';
 
 export default defineConfig({
   plugins: [react()],
-  resolve: { dedupe: ['react', 'react-dom'] },
+  resolve: {
+    alias: { '@': path.resolve(import.meta.dirname, 'src') },
+    dedupe: ['react', 'react-dom'],
+  },
   test: {
     environment: 'happy-dom',
-    include: ['src/**/*.test.tsx'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
   },
 });
