@@ -1,6 +1,7 @@
 """Snowflake-specific expression and datatype translation."""
 
 from decimal import Decimal
+import re
 from typing import Callable
 
 from api.parser.expressions import (
@@ -23,8 +24,46 @@ class UnsupportedSnowflakeFunction(ValueError):
     """Raised when a function has no supported Snowflake translation."""
 
 
+_UNQUOTED_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+_SNOWFLAKE_RESERVED_WORDS = frozenset({
+    "ALL", "ALTER", "AND", "ANY", "ASC", "AS", "BETWEEN", "BY", "CHECK",
+    "COLUMN", "CONNECT", "CREATE", "CURRENT", "CURRENT_DATE", "CURRENT_TIME",
+    "CURRENT_TIMESTAMP", "CURRENT_USER", "DELETE", "DESC", "DISTINCT", "DROP",
+    "ELSE", "EXISTS", "FOLLOWING", "FOR", "FROM", "GRANT", "GROUP",
+    "HAVING", "ILIKE", "IN", "INCREMENT", "INSERT", "INTERSECT", "INTO", "IS",
+    "LIKE", "LOCALTIME", "LOCALTIMESTAMP", "MINUS", "NOT", "NULL", "OF", "ON",
+    "OR", "ORDER", "QUALIFY", "REGEXP", "REVOKE", "RLIKE", "ROW", "ROWS",
+    "SAMPLE", "SELECT", "SET", "SOME", "START", "TABLE", "TABLESAMPLE", "THEN",
+    "TO", "TRIGGER", "UNION", "UNIQUE", "UPDATE", "VALUES", "WHENEVER", "WHERE",
+    "WINDOW", "WITH",
+})
+_COLUMN_RESTRICTED_KEYWORDS = frozenset({
+    "CASE", "CAST", "FALSE", "TRUE", "TRY_CAST", "WHEN",
+})
+_RELATION_RESTRICTED_KEYWORDS = frozenset({
+    "CROSS", "FULL", "INNER", "JOIN", "LATERAL", "LEFT", "NATURAL", "RIGHT",
+    "USING",
+})
+
+
 def quote_identifier(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
+
+
+def sql_identifier(identifier: str, *, context: str = "column") -> str:
+    """Keep ordinary identifiers unquoted; quote only reserved or invalid names."""
+    if context == "column":
+        restricted = _COLUMN_RESTRICTED_KEYWORDS
+    elif context == "relation":
+        restricted = _RELATION_RESTRICTED_KEYWORDS
+    else:
+        raise ValueError(f"Unsupported SQL identifier context: {context}.")
+    if (
+        _UNQUOTED_IDENTIFIER.fullmatch(identifier)
+        and identifier.upper() not in (_SNOWFLAKE_RESERVED_WORDS | restricted)
+    ):
+        return identifier
+    return quote_identifier(identifier)
 
 
 def render_literal(literal: Literal) -> str:
@@ -59,6 +98,8 @@ def render_binary(operator: str, left: str, right: str) -> str:
         raise ValueError(f"Unsupported binary operator: {operator}.")
     if operator in {"IS NULL", "IS NOT NULL"}:
         return f"({left} {operator})"
+    if operator == "||":
+        return render_concat([left, right])
     return f"({left} {operator} {right})"
 
 
@@ -91,7 +132,7 @@ def render_function(function: FunctionCall, arguments: list[str]) -> str:
     if name == "CONCAT":
         if count < 2:
             raise UnsupportedSnowflakeFunction("CONCAT requires at least two arguments.")
-        return f"CONCAT({', '.join(arguments)})"
+        return render_concat(arguments)
     if name == "TO_CHAR":
         _require_arity(name, count, {1, 2})
         return f"TO_VARCHAR({', '.join(arguments)})"
@@ -102,7 +143,14 @@ def render_function(function: FunctionCall, arguments: list[str]) -> str:
             raise UnsupportedSnowflakeFunction(
                 "DATE_DIFF requires a supported string-literal date unit."
             )
-        unit = _DATE_DIFF_UNITS.get(str(unit_argument.value).upper())
+        unit_token = str(unit_argument.value).upper()
+        if unit_token == "YYYY":
+            return (
+                f"(MONTHS_BETWEEN({arguments[0]}, {arguments[1]}) / 12)"
+            )
+        if unit_token == "MM":
+            return f"MONTHS_BETWEEN({arguments[0]}, {arguments[1]})"
+        unit = _DATE_DIFF_UNITS.get(unit_token)
         if unit is None:
             raise UnsupportedSnowflakeFunction(
                 f"DATE_DIFF unit '{unit_argument.value}' has no Snowflake translation."
@@ -139,6 +187,21 @@ def render_function(function: FunctionCall, arguments: list[str]) -> str:
     raise UnsupportedSnowflakeFunction(
         f"Function '{function.name}' has no Snowflake translation."
     )
+
+
+def _render_null_ignoring_concat(arguments: list[str]) -> str:
+    all_null = " AND ".join(f"({argument}) IS NULL" for argument in arguments)
+    joined = " || ".join(
+        f"COALESCE(({argument}), '')" for argument in arguments
+    )
+    return f"(CASE WHEN {all_null} THEN NULL ELSE ({joined}) END)"
+
+
+def render_concat(arguments: list[str]) -> str:
+    """Render PowerCenter concatenation with NULL operands ignored."""
+    if len(arguments) < 2:
+        raise ValueError("Concatenation requires at least two operands.")
+    return _render_null_ignoring_concat(arguments)
 
 
 _DATE_DIFF_UNITS = {

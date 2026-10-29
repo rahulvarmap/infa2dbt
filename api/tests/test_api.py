@@ -168,9 +168,10 @@ def test_generate_dbt_project_from_sample_returns_generated_project_zip():
         assert diagnostics["blocked_models"] == []
         target = archive.read("models/marts/dim_member.sql").decode()
         assert not target.startswith("-- BLOCKED MODEL: dim_member")
-        assert "DATEDIFF(year," in target
+        assert "MONTHS_BETWEEN(" in target
         staging = archive.read("models/staging/stg_member_enrollment.sql").decode()
-        assert 'where (src."STATUS_CD" IS NOT NULL)' in staging
+        assert "where" not in staging.lower()
+        assert "where (__in.status_cd IS NOT NULL)" in target
 
 
 def test_generate_dbt_project_from_upload():

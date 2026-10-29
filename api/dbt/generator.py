@@ -43,12 +43,13 @@ from .dependency_lock import DBT_REQUIREMENTS_LOCK
 from .dialects.snowflake import (
     UnsupportedSnowflakeFunction,
     UnsupportedSnowflakeType,
-    quote_identifier,
     render_binary,
+    render_concat,
     render_function,
     render_literal,
     render_predicate,
     render_unary,
+    sql_identifier,
     snowflake_type,
 )
 from .predicates import parse_simple_predicate
@@ -93,10 +94,6 @@ class _Block:
 @dataclass(frozen=True)
 class _SourceFilterSpec:
     expression: Expression
-    source_text: str
-    mapping: str
-    instance: str
-    source_identity: str
 
 
 class _GenerationBlocked(Exception):
@@ -192,6 +189,15 @@ def _format_diagnostic(diagnostic: Diagnostic) -> dict:
     return diagnostic.model_dump()
 
 
+def _concat_expression_terms(expression: Expression) -> list[Expression]:
+    if isinstance(expression, BinaryOperator) and expression.operator == "||":
+        return (
+            _concat_expression_terms(expression.left)
+            + _concat_expression_terms(expression.right)
+        )
+    return [expression]
+
+
 def _render_expression(
     expression: Expression,
     resolve_port: Callable[[PortReference], str],
@@ -208,6 +214,11 @@ def _render_expression(
             _render_expression(expression.operand, resolve_port),
         )
     if isinstance(expression, BinaryOperator):
+        if expression.operator == "||":
+            return render_concat([
+                _render_expression(term, resolve_port)
+                for term in _concat_expression_terms(expression)
+            ])
         return render_binary(
             expression.operator,
             _render_expression(expression.left, resolve_port),
@@ -265,7 +276,11 @@ class _ProjectBuilder:
         )
         return block
 
-    def _source_filter_column(self, source: Source, reference: PortReference) -> str:
+    def _validate_source_filter_column(
+        self,
+        source: Source,
+        reference: PortReference,
+    ) -> None:
         parts = reference.name.split(".")
         column_name = parts[-1]
         if (
@@ -288,10 +303,27 @@ class _ProjectBuilder:
                 f"Source filter references unknown column '{reference.name}' "
                 f"on source '{source.name}'."
             )
-        return f"src.{quote_identifier(field.name)}"
 
-    def _index_source_filters(self) -> dict[str, list[_SourceFilterSpec]]:
-        filters: dict[str, list[_SourceFilterSpec]] = defaultdict(list)
+    def _source_filter_relation_column(
+        self,
+        relation: _Relation,
+        relation_alias: str,
+        reference: PortReference,
+    ) -> str:
+        output_name = relation.columns.get(
+            normalize_identifier(reference.name.split(".")[-1])
+        )
+        if output_name is None:
+            raise ValueError(
+                f"Source filter references unconnected column '{reference.name}'."
+            )
+        return (
+            f"{sql_identifier(relation_alias, context='relation')}."
+            f"{sql_identifier(output_name)}"
+        )
+
+    def _index_source_filters(self) -> dict[tuple[str, str], _SourceFilterSpec]:
+        filters: dict[tuple[str, str], _SourceFilterSpec] = {}
         for mapping in self.result.mappings:
             mapping_key = self.mapping_ids[id(mapping)]
             instances = {
@@ -370,7 +402,7 @@ class _ProjectBuilder:
                 source_identity, source = next(iter(source_definitions.items()))
                 try:
                     for reference in iter_port_references(expression):
-                        self._source_filter_column(source, reference)
+                        self._validate_source_filter_column(source, reference)
                 except ValueError as error:
                     self._record_source_filter_block(
                         mapping_key,
@@ -379,26 +411,10 @@ class _ProjectBuilder:
                         str(error),
                     )
                     continue
-                filters[source_identity].append(_SourceFilterSpec(
+                filters[(mapping_key, normalize_identifier(instance.name))] = _SourceFilterSpec(
                     expression=expression,
-                    source_text=source_text,
-                    mapping=mapping_key,
-                    instance=instance.name,
-                    source_identity=source_identity,
-                ))
-
-        for source_identity, specs in list(filters.items()):
-            distinct_filters = {item.source_text for item in specs}
-            if len(distinct_filters) > 1:
-                for spec in specs:
-                    self._record_source_filter_block(
-                        spec.mapping,
-                        spec.instance,
-                        "SOURCE_QUALIFIER_SOURCE_FILTER_CONFLICT",
-                        f"Source '{source_identity}' has different filters across mappings; one shared staging model cannot represent both.",
-                    )
-                del filters[source_identity]
-        return dict(filters)
+                )
+        return filters
 
     def _index_sources(self) -> dict[str, _SourceInfo]:
         sources = {}
@@ -486,7 +502,7 @@ class _ProjectBuilder:
             "-- This placeholder intentionally contains no migrated transformation logic.\n"
             f"{comments}\n"
             "{{ config(materialized='view') }}\n\n"
-            'select cast(null as variant) as "__INFA2DBT_BLOCKED_MODEL"\n'
+            "select cast(null as variant) as __infa2dbt_blocked_model\n"
             "where 1 = 0\n"
         )
 
@@ -513,8 +529,8 @@ class _ProjectBuilder:
                     )
                     continue
                 projections.append(
-                    f"  cast(src.{quote_identifier(field.name)} as {data_type}) "
-                    f"as {quote_identifier(snake_case(field.name))}"
+                    f"  cast(src.{sql_identifier(field.name)} as {data_type}) "
+                    f"as {sql_identifier(snake_case(field.name))}"
                 )
             if not source.fields:
                 blocks.append(_Block(
@@ -539,23 +555,12 @@ class _ProjectBuilder:
                 )
             else:
                 columns = ",\n".join(projections)
-                filter_sql = ""
-                filter_specs = self.source_filters.get(identity, [])
-                if filter_specs:
-                    spec = filter_specs[0]
-                    filter_sql = render_predicate(
-                        spec.expression,
-                        lambda reference: self._source_filter_column(source, reference),
-                    )
-                sql = (
+                self.files[path] = (
                     f"{{{{ config(materialized='view') }}}}\n\n"
                     "select\n"
                     f"{columns}\n"
                     f"from {{{{ source({_jinja_string(info.group_name)}, {_jinja_string(source.name)}) }}}} as src\n"
                 )
-                if filter_sql:
-                    sql += f"where {filter_sql}\n"
-                self.files[path] = sql
 
     def _source_yml(self) -> str:
         groups: dict[str, list[_SourceInfo]] = defaultdict(list)
@@ -839,6 +844,32 @@ class _ProjectBuilder:
                 if "VARIABLE" in port.porttype.upper()
             }
             relation_alias = "__in"
+            source_filter_sql = ""
+            source_filter = self.source_filters.get((mapping_key, instance_key))
+            if type_name == "source qualifier" and source_filter is not None:
+                if parent_relation is None:
+                    raise _GenerationBlocked(_Block(
+                        "SOURCE_QUALIFIER_SOURCE_FILTER_SOURCE",
+                        f"Source filter on '{instance.name}' has no input relation.",
+                        instance.name,
+                        "Source Filter",
+                    ))
+                try:
+                    source_filter_sql = render_predicate(
+                        source_filter.expression,
+                        lambda reference: self._source_filter_relation_column(
+                            parent_relation,
+                            relation_alias,
+                            reference,
+                        ),
+                    )
+                except ValueError as error:
+                    raise _GenerationBlocked(_Block(
+                        "SOURCE_QUALIFIER_SOURCE_FILTER_COLUMN",
+                        str(error),
+                        instance.name,
+                        "Source Filter",
+                    )) from error
             active_ports: set[str] = set()
 
             def resolve_port(reference: PortReference) -> str:
@@ -915,7 +946,10 @@ class _ProjectBuilder:
                             instance.name,
                             reference.name,
                         ))
-                    return f"{quote_identifier(relation_alias)}.{quote_identifier(output_name)}"
+                    return (
+                        f"{sql_identifier(relation_alias, context='relation')}."
+                        f"{sql_identifier(output_name)}"
+                    )
 
                 if (
                     candidate is not None
@@ -956,7 +990,10 @@ class _ProjectBuilder:
                 if parent_relation is not None:
                     output_name = parent_relation.columns.get(ref_key)
                     if output_name is not None:
-                        return f"{quote_identifier(relation_alias)}.{quote_identifier(output_name)}"
+                        return (
+                            f"{sql_identifier(relation_alias, context='relation')}."
+                            f"{sql_identifier(output_name)}"
+                        )
                 raise _GenerationBlocked(_Block(
                     "UNRESOLVED_EXPRESSION_PORT",
                     f"Expression references undeclared or unconnected port '{reference.name}'.",
@@ -999,7 +1036,7 @@ class _ProjectBuilder:
                 output_name = snake_case(port.name)
                 columns[normalize_identifier(port.name)] = output_name
                 projections.append(
-                    f"    {expression_sql} as {quote_identifier(output_name)}"
+                    f"    {expression_sql} as {sql_identifier(output_name)}"
                 )
 
             where_sql = ""
@@ -1036,17 +1073,28 @@ class _ProjectBuilder:
             cte_name = snake_case(instance.name)
             if parent_relation is None:
                 body = ",\n".join(projections)
-                cte_sql = f"{quote_identifier(cte_name)} as (\n  select\n{body}\n)"
+                cte_sql = (
+                    f"{sql_identifier(cte_name, context='relation')} as "
+                    f"(\n  select\n{body}\n)"
+                )
             else:
                 from_sql = parent_relation.sql
                 if parent_relation.is_cte:
-                    from_sql = quote_identifier(from_sql)
+                    from_sql = sql_identifier(from_sql, context="relation")
                 body = ",\n".join(projections)
-                where_clause = f"\n  where {where_sql}" if where_sql else ""
+                where_conditions = [
+                    condition for condition in (source_filter_sql, where_sql)
+                    if condition
+                ]
+                where_clause = (
+                    "\n  where " + " AND ".join(where_conditions)
+                    if where_conditions else ""
+                )
                 cte_sql = (
-                    f"{quote_identifier(cte_name)} as (\n"
+                    f"{sql_identifier(cte_name, context='relation')} as (\n"
                     f"  select\n{body}\n"
-                    f"  from {from_sql} as {quote_identifier(relation_alias)}"
+                    f"  from {from_sql} as "
+                    f"{sql_identifier(relation_alias, context='relation')}"
                     f"{where_clause}\n)"
                 )
             ctes.append(cte_sql)
@@ -1098,8 +1146,9 @@ class _ProjectBuilder:
             target_alias = snake_case(field_item.name)
             target_fields.append(field_item)
             target_projections.append(
-                f"  {quote_identifier('target_input')}.{quote_identifier(relation_field)} "
-                f"as {quote_identifier(target_alias)}"
+                f"  {sql_identifier('target_input', context='relation')}."
+                f"{sql_identifier(relation_field)} "
+                f"as {sql_identifier(target_alias)}"
             )
         if not target_projections:
             raise _GenerationBlocked(_Block(
@@ -1119,14 +1168,15 @@ class _ProjectBuilder:
         ]
         from_sql = target_input.sql
         if target_input.is_cte:
-            from_sql = quote_identifier(from_sql)
+            from_sql = sql_identifier(from_sql, context="relation")
         cte_prefix = "with\n" + ",\n".join(ctes) + "\n\n" if ctes else ""
         target_select = ",\n".join(target_projections)
         return (
             f"{{{{ config(materialized='view') }}}}\n\n"
             f"{cte_prefix}select\n"
             f"{target_select}\n"
-            f"from {from_sql} as {quote_identifier('target_input')}\n"
+            f"from {from_sql} as "
+            f"{sql_identifier('target_input', context='relation')}\n"
         )
 
     def _build_targets(self) -> list[dict]:

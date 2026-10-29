@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import shutil
 import subprocess
 import zipfile
@@ -16,6 +17,7 @@ from api.dbt.dialects.snowflake import (
     UnsupportedSnowflakeType,
     render_function,
     snowflake_type,
+    sql_identifier,
 )
 from api.parser import parse_powercenter_xml
 from api.parser.expressions import FunctionCall, Literal, PortReference
@@ -92,9 +94,9 @@ def test_supported_subset_compiles_expression_ast_and_emits_dbt_refs():
     assert "IFF(" in target
     assert "ISNULL(" not in target
     assert "NVL(" in target
-    assert 'LTRIM(RTRIM("__in"."a"))' in target
+    assert "LTRIM(RTRIM(__in.a))" in target
     assert "LTRIM(RTRIM(A))" not in target
-    assert "where (\"__in\".\"full_name\" IS NOT NULL)" in target
+    assert "where (__in.full_name IS NOT NULL)" in target
     assert "models/sources.yml" in project.files
     assert "models/schema.yml" in project.files
 
@@ -115,16 +117,18 @@ def test_source_qualifier_unsupported_features_block_target(
     assert project.blocked_models[0]["reasons"] == [code]
 
 
-def test_source_qualifier_source_filter_is_translated_in_staging_model():
+def test_source_qualifier_filter_is_translated_in_mapping_cte():
     project = _project(_with_source_qualifier_attribute(
         "Source Filter",
         "S.A IN ('x', 'y') AND B NOT LIKE 'z%'",
     ))
     staging = project.files["models/staging/stg_s.sql"]
+    target = project.files["models/marts/t.sql"]
 
     assert project.blocked_models == []
-    assert "where ((src.\"A\" IN ('x', 'y')) AND (src.\"B\" NOT LIKE 'z%'))" in staging
-    assert "{{ ref('stg_s') }}" in project.files["models/marts/t.sql"]
+    assert "where" not in staging.lower()
+    assert "where ((__in.a IN ('x', 'y')) AND (__in.b NOT LIKE 'z%'))" in target
+    assert "{{ ref('stg_s') }}" in target
 
 
 @pytest.mark.parametrize(("value", "code"), [
@@ -203,15 +207,58 @@ def test_sample_date_functions_have_centralized_snowflake_translations():
     assert render_function(
         date_diff,
         ["CURRENT_TIMESTAMP()::TIMESTAMP_NTZ", '"dob"', "'YYYY'"],
-    ) == "DATEDIFF(year, \"dob\", CURRENT_TIMESTAMP()::TIMESTAMP_NTZ)"
+    ) == "(MONTHS_BETWEEN(CURRENT_TIMESTAMP()::TIMESTAMP_NTZ, \"dob\") / 12)"
+    month_diff = FunctionCall(
+        "DATE_DIFF",
+        (
+            FunctionCall("SYSDATE", ()),
+            PortReference("DOB"),
+            Literal("string", "MM"),
+        ),
+    )
+    assert render_function(
+        month_diff,
+        ["CURRENT_TIMESTAMP()::TIMESTAMP_NTZ", '"dob"', "'MM'"],
+    ) == "MONTHS_BETWEEN(CURRENT_TIMESTAMP()::TIMESTAMP_NTZ, \"dob\")"
     assert render_function(
         FunctionCall("TRUNC", (FunctionCall("SYSDATE", ()),)),
         ["CURRENT_TIMESTAMP()::TIMESTAMP_NTZ"],
     ) == "DATE_TRUNC('DAY', CURRENT_TIMESTAMP()::TIMESTAMP_NTZ)"
     assert render_function(
         FunctionCall("TRUNC", (date_diff,)),
-        ["DATEDIFF(year, \"dob\", CURRENT_TIMESTAMP()::TIMESTAMP_NTZ)"],
-    ) == "TRUNC(DATEDIFF(year, \"dob\", CURRENT_TIMESTAMP()::TIMESTAMP_NTZ))"
+        ["(MONTHS_BETWEEN(CURRENT_TIMESTAMP()::TIMESTAMP_NTZ, \"dob\") / 12)"],
+    ) == "TRUNC((MONTHS_BETWEEN(CURRENT_TIMESTAMP()::TIMESTAMP_NTZ, \"dob\") / 12))"
+
+
+def test_sql_identifier_quotes_only_reserved_or_invalid_names():
+    assert sql_identifier("member_id") == "member_id"
+    assert sql_identifier("select") == '"select"'
+    assert sql_identifier("member id") == '"member id"'
+    assert sql_identifier("account") == "account"
+    assert sql_identifier("left") == "left"
+    assert sql_identifier("left", context="relation") == '"left"'
+    assert sql_identifier("case") == '"case"'
+
+
+def test_generated_target_query_uses_unquoted_column_access():
+    target = _project().files["models/marts/t.sql"]
+    assert "sq as (" in target
+    assert "__in.a as a" in target
+    assert '"__in"."a"' not in target
+    query = target.replace(
+        "{{ ref('stg_s') }}",
+        "(select 'Ada' as a, 'Lovelace' as b)",
+    ).split("\n\n", 1)[1]
+
+    connection = sqlite3.connect(":memory:")
+    connection.create_function(
+        "IFF", 3, lambda condition, truthy, falsy: truthy if condition else falsy
+    )
+    connection.create_function("NVL", 2, lambda value, fallback: fallback if value is None else value)
+    try:
+        assert connection.execute(query).fetchone() == ("Ada", "Ada Lovelace")
+    finally:
+        connection.close()
 
 
 def test_project_zip_is_byte_for_byte_deterministic():
