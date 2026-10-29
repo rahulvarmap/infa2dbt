@@ -15,6 +15,7 @@ import {
   AlertCircle,
   ArrowUpFromLine,
   Check,
+  Download,
   FileCode2,
   FileText,
   LoaderCircle,
@@ -65,6 +66,8 @@ function Home() {
   const [parsedLabel, setParsedLabel] = useState('');
   const [parsedSource, setParsedSource] = useState<ParsedSource | null>(null);
   const [activeSample, setActiveSample] = useState<string | null>(null);
+  const [generatingProject, setGeneratingProject] = useState(false);
+  const [generationError, setGenerationError] = useState('');
   const busy = upload.isPending || parseXml.isPending || parseSample.isPending;
 
   useEffect(() => {
@@ -84,6 +87,7 @@ function Home() {
 
   function selectFile(candidate: File | undefined) {
     setValidationError('');
+    setGenerationError('');
     if (busy) return;
     setResult(null);
     setParsed(null); setParsedSource(null);
@@ -120,6 +124,7 @@ function Home() {
     setValidationError('');
     setResult(null);
     setParsed(null); setParsedSource(null);
+    setGenerationError('');
     parseXml.reset();
     parseSample.reset();
     try {
@@ -139,6 +144,7 @@ function Home() {
     setValidationError('');
     setResult(null);
     setParsed(null); setParsedSource(null);
+    setGenerationError('');
     setFile(null);
     upload.reset();
     parseXml.reset();
@@ -155,12 +161,53 @@ function Home() {
     }
   }
 
+  async function onDownloadDbtProject() {
+    if (!parsedSource || generatingProject) return;
+    setGenerationError('');
+    setGeneratingProject(true);
+    const form = new FormData();
+    if (parsedSource.kind === 'file') {
+      form.append('file', parsedSource.file);
+    } else {
+      form.append('sample_name', parsedSource.name);
+    }
+    try {
+      const response = await fetch('/api/dbt/project', {
+        method: 'POST',
+        body: form,
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error || 'The dbt project could not be generated.');
+      }
+      if (!response.headers.get('content-type')?.includes('application/zip')) {
+        throw new Error('The server returned an invalid dbt project archive.');
+      }
+      const archive = await response.blob();
+      const url = URL.createObjectURL(archive);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'infa2dbt_snowflake.zip';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (error) {
+      setGenerationError(
+        error instanceof Error ? error.message : 'The dbt project could not be generated.',
+      );
+    } finally {
+      setGeneratingProject(false);
+    }
+  }
+
   function clearFile() {
     if (busy) return;
     setFile(null);
     setResult(null);
     setParsed(null); setParsedSource(null);
     setValidationError('');
+    setGenerationError('');
     upload.reset();
     parseXml.reset();
     parseSample.reset();
@@ -361,7 +408,31 @@ function Home() {
         {(parsed || parseXml.isPending || parseSample.isPending) && (
           <>
             <div className="section-rule">Parsed mapping</div>
-            {parsed ? <ParseInspector key={parsedLabel + String(parsed.mappings.length)} data={parsed} label={parsedLabel} source={parsedSource} /> : (
+            {parsed ? (
+              <>
+                <div className="flex flex-col items-end gap-2 pb-3 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    className="sample-button flex items-center gap-2"
+                    onClick={() => { void onDownloadDbtProject(); }}
+                    disabled={generatingProject || !parsedSource}
+                    data-testid="button-download-dbt-project"
+                  >
+                    {generatingProject
+                      ? <LoaderCircle size={14} className="animate-spin" />
+                      : <Download size={14} />}
+                    {generatingProject ? 'Building dbt project…' : 'Download dbt project'}
+                  </button>
+                </div>
+                {generationError && (
+                  <div className="error-message mb-3" role="alert" data-testid="error-dbt-project">
+                    <AlertCircle size={17} className="mt-0.5 shrink-0" />
+                    <span>{generationError}</span>
+                  </div>
+                )}
+                <ParseInspector key={parsedLabel + String(parsed.mappings.length)} data={parsed} label={parsedLabel} source={parsedSource} />
+              </>
+            ) : (
               <div className="inspector" data-testid="status-parsing"><div className="sample-skeleton" /><div className="sample-skeleton" /><div className="sample-skeleton" /></div>
             )}
           </>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from api.parser.identifiers import normalize_identifier
 from api.parser.lineage import LineageGraph, mapping_key
 from api.parser.models import Diagnostic, LineageData, ParseResponse, TraceResponse
 from api.request_limits import MAX_MAPPINGS
+from api.dbt import build_project, zip_project
 
 
 class MappingLimitExceeded(ValueError):
@@ -97,6 +99,19 @@ def process_xml_request(
                 ),
             )
             return {"status_code": 200, "content": response.model_dump()}
+
+        if mode == "generate":
+            project = build_project(result)
+            archive = zip_project(project.files)
+            return {
+                "status_code": 200,
+                "content": {
+                    "filename": "infa2dbt_snowflake.zip",
+                    "zip_base64": base64.b64encode(archive).decode("ascii"),
+                    "blocked_models": project.blocked_models,
+                    "diagnostics": project.diagnostics,
+                },
+            }
 
         return {"status_code": 500, "content": {"error": "Invalid processing mode."}}
     except MappingLimitExceeded as error:

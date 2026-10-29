@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import importlib
 import json
 import sys
@@ -6,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.datastructures import FormData, UploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
@@ -213,6 +214,58 @@ async def parse_sample(filename: str) -> JSONResponse:
     if len(contents) > MAX_FILE_SIZE:
         return JSONResponse(status_code=413, content={"error": "Sample must be 5 MB or smaller."})
     return await process_in_worker(contents)
+
+
+@app.post("/dbt/project")
+@app.post("/api/dbt/project")
+async def download_dbt_project(request: Request) -> Response:
+    upload = await read_xml_upload(
+        request,
+        allowed_fields={"sample_name"},
+        require_file=False,
+    )
+    if isinstance(upload, JSONResponse):
+        return upload
+    _, file_contents, fields = upload
+    sample_name = fields.get("sample_name")
+    if (file_contents is None) == (sample_name is None):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Provide exactly one XML file or sample_name."},
+        )
+    if file_contents is not None:
+        contents = file_contents
+    else:
+        assert sample_name is not None
+        path = sample_files().get(sample_name)
+        if path is None:
+            return JSONResponse(status_code=404, content={"error": "Sample not found."})
+        with path.open("rb") as sample:
+            contents = sample.read(MAX_FILE_SIZE + 1)
+        if len(contents) > MAX_FILE_SIZE:
+            return JSONResponse(
+                status_code=413,
+                content={"error": "Sample must be 5 MB or smaller."},
+            )
+
+    result = await process_in_worker(contents, {"mode": "generate"})
+    if result.status_code != 200:
+        return result
+    try:
+        payload = json.loads(result.body)
+        content = payload["content"]
+        archive = base64.b64decode(content["zip_base64"], validate=True)
+        filename = content["filename"]
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return JSONResponse(
+            status_code=500,
+            content={"error": "dbt project generation failed."},
+        )
+    return Response(
+        content=archive,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/lineage/trace")

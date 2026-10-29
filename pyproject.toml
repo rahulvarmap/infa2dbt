@@ -1,0 +1,19 @@
+[project]
+name = "repl-nix-workspace"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "Rahul Varma Polakonda", email = "rahulvarmaas@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "dbt-core==1.12.6",
+    "dbt-snowflake==1.12.3",
+]
+
+[project.scripts]
+repl-nix-workspace = "repl_nix_workspace:main"
+
+[build-system]
+requires = ["uv_build>=0.13.4,<0.14.0"]
+build-backend = "uv_build"
