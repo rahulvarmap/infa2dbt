@@ -14,7 +14,13 @@ MAX_MAPPINGS = 50
 MAX_MULTIPART_FIELDS = 4
 MAX_MULTIPART_FIELD_SIZE = 16 * 1024
 PROCESSING_TIMEOUT_SECONDS = 10.0
+VALIDATION_TIMEOUT_SECONDS = 60.0
 PROCESSING_LOCK_PATH = Path("/tmp/infa2dbt-processing.lock")
+
+VALIDATION_PATHS = {
+    "/dbt/validate",
+    "/api/dbt/validate",
+}
 
 PROCESSING_PATHS = {
     "/upload",
@@ -23,7 +29,7 @@ PROCESSING_PATHS = {
     "/api/parse",
     "/lineage/trace",
     "/api/lineage/trace",
-}
+} | VALIDATION_PATHS
 
 
 def is_processing_request(scope: dict[str, Any]) -> bool:
@@ -95,6 +101,12 @@ class ProcessingLimitsMiddleware:
             return
 
         response_started = False
+        validation_request = scope.get("path") in VALIDATION_PATHS
+        timeout_seconds = (
+            VALIDATION_TIMEOUT_SECONDS
+            if validation_request
+            else PROCESSING_TIMEOUT_SECONDS
+        )
         try:
             content_lengths = [
                 value
@@ -164,16 +176,21 @@ class ProcessingLimitsMiddleware:
 
             await asyncio.wait_for(
                 self.app(scope, replay_body, send_with_tracking),
-                timeout=PROCESSING_TIMEOUT_SECONDS,
+                timeout=timeout_seconds,
             )
         except TimeoutError:
             if not response_started:
+                error = (
+                    f"DuckDB validation exceeded the {timeout_seconds:g}-second time limit."
+                    if validation_request
+                    else f"XML processing exceeded the {timeout_seconds:g}-second time limit."
+                )
                 await _json_response(
                     scope,
                     receive,
                     send,
                     504,
-                    "XML processing exceeded the 10-second time limit.",
+                    error,
                 )
         finally:
             if lock_descriptor is not None:

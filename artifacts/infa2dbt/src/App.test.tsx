@@ -132,4 +132,20 @@ describe('DuckDB validation', () => {
     expect(options.method).toBe('POST');
     expect((options.body as FormData).get('sample_name')).toBe('sample.xml');
   });
+
+  it('shows an accessible progress state while validation is pending', async () => {
+    hooks.parseSample.mockResolvedValue({ mappings: [], diagnostics: [] });
+    const fetchMock = vi.fn().mockReturnValue(new Promise<never>(() => {}));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId('button-try-sample-sample.xml'));
+    await screen.findByTestId('button-validate-dbt-project');
+    fireEvent.click(screen.getByTestId('button-validate-dbt-project'));
+
+    const progress = await screen.findByTestId('status-dbt-validation');
+    expect(progress.getAttribute('aria-busy')).toBe('true');
+    expect(progress.textContent).toContain('Seeding synthetic data, compiling, and running models.');
+    expect(screen.getByTestId('validation-elapsed').textContent).toBe('0s');
+  });
 });

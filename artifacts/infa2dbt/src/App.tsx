@@ -84,6 +84,7 @@ function Home() {
   const [generatingProject, setGeneratingProject] = useState(false);
   const [generationError, setGenerationError] = useState('');
   const [validatingProject, setValidatingProject] = useState(false);
+  const [validationElapsedSeconds, setValidationElapsedSeconds] = useState(0);
   const [validationReport, setValidationReport] = useState<ValidationReport | null>(null);
   const [validationReportError, setValidationReportError] = useState('');
   const busy = upload.isPending || parseXml.isPending || parseSample.isPending;
@@ -97,6 +98,18 @@ function Home() {
     document.documentElement.classList.toggle('dark', dark);
     window.localStorage.setItem('infa2dbt-theme', dark ? 'dark' : 'light');
   }, [dark]);
+
+  useEffect(() => {
+    if (!validatingProject) {
+      setValidationElapsedSeconds(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const interval = window.setInterval(() => {
+      setValidationElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [validatingProject]);
 
   const apiReady = readiness.data?.status === 'ready' && !readiness.isError;
   const apiError = readiness.isError;
@@ -506,6 +519,29 @@ function Home() {
                   <div className="error-message mb-3" role="alert" data-testid="error-dbt-validation">
                     <AlertCircle size={17} className="mt-0.5 shrink-0" />
                     <span>{validationReportError}</span>
+                  </div>
+                )}
+                {validatingProject && (
+                  <div
+                    className="validation-progress"
+                    role="status"
+                    aria-live="polite"
+                    aria-busy="true"
+                    data-testid="status-dbt-validation"
+                  >
+                    <div className="validation-progress-copy">
+                      <LoaderCircle size={17} className="validation-progress-spinner animate-spin" aria-hidden="true" />
+                      <div className="validation-progress-text">
+                        <strong>DuckDB validation in progress</strong>
+                        <span>Seeding synthetic data, compiling, and running models.</span>
+                      </div>
+                      <span className="validation-progress-elapsed" data-testid="validation-elapsed">
+                        {validationElapsedSeconds}s
+                      </span>
+                    </div>
+                    <div className="validation-progress-track" aria-hidden="true">
+                      <span className="validation-progress-bar" />
+                    </div>
                   </div>
                 )}
                 {validationReport && (

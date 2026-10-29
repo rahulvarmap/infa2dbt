@@ -997,6 +997,15 @@ input:focus-visible,
 .sample-button:hover:not(:disabled) { border-color: hsl(var(--primary) / 0.55); }
 .sample-button:disabled, .remove-file:disabled { opacity: 0.47; cursor: not-allowed; }
 .project-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding-bottom: 12px; }
+.validation-progress { margin: 0 0 14px; padding: 13px 14px; border: 1px solid hsl(var(--primary) / 0.28); border-radius: 10px; background: hsl(var(--primary) / 0.055); }
+.validation-progress-copy { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.validation-progress-spinner { flex: 0 0 auto; color: hsl(var(--primary)); }
+.validation-progress-text { display: grid; gap: 3px; min-width: 0; flex: 1; }
+.validation-progress-text strong { color: hsl(var(--foreground)); font-size: 12px; }
+.validation-progress-text span { color: hsl(var(--muted-foreground)); font-size: 11px; line-height: 1.45; }
+.validation-progress-elapsed { flex: 0 0 auto; color: hsl(var(--muted-foreground)); font-family: var(--app-font-mono); font-size: 11px; }
+.validation-progress-track { height: 4px; margin-top: 11px; overflow: hidden; border-radius: 999px; background: hsl(var(--primary) / 0.12); }
+.validation-progress-bar { display: block; width: 34%; height: 100%; border-radius: inherit; background: hsl(var(--primary)); animation: validation-sweep 1.45s ease-in-out infinite; }
 .validation-results { margin: 0 0 16px; padding: 16px; border: 1px solid hsl(var(--border)); border-radius: 10px; background: hsl(var(--card) / 0.72); }
 .validation-heading, .validation-model-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .validation-heading { font-size: 14px; }
@@ -1036,6 +1045,8 @@ input:focus-visible,
 .port-table td.expr { font-family: var(--app-font-mono); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; min-width: 240px; max-width: 420px; }
 .raw-json { margin: 12px 0 0; max-height: 480px; overflow: auto; padding: 14px; border-radius: 9px; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); font-family: var(--app-font-mono); font-size: 11px; white-space: pre-wrap; word-break: break-word; }
 @keyframes pulse { 50% { opacity: 0.5; } }
+@keyframes validation-sweep { from { transform: translateX(-120%); } to { transform: translateX(320%); } }
+@media (prefers-reduced-motion: reduce) { .validation-progress-bar { width: 100%; animation: none; } }
 @media (max-width: 640px) { .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .inspector { padding: 14px; } }
 @media (max-width: 640px) { .project-actions { display: grid; grid-template-columns: 1fr; } .project-actions .sample-button { justify-content: center; width: 100%; } .validation-results { padding: 12px; } .validation-steps { grid-template-columns: 1fr; } }
 

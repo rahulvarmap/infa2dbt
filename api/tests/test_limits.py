@@ -149,9 +149,59 @@ def test_busy_requests_timeout_kills_worker_and_releases_slot(tmp_path, monkeypa
             assert (await client.get("/health")).status_code == 200
             timed_out = await first
             assert timed_out.status_code == 504
-            assert "10-second" in timed_out.json()["error"]
+            assert "1-second" in timed_out.json()["error"]
             recovered = await client.post(
                 "/upload", files={"file": ("sample.xml", b"<POWERMART/>")}
+            )
+            assert recovered.status_code == 200
+
+    asyncio.run(run())
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
+
+
+def test_validation_has_60_second_budget_and_uses_shared_lock(tmp_path, monkeypatch):
+    assert request_limits.PROCESSING_TIMEOUT_SECONDS == 10.0
+    assert request_limits.VALIDATION_TIMEOUT_SECONDS == 60.0
+
+    pid_file = tmp_path / "validation-worker.pid"
+    worker = tmp_path / "slow_validation_worker.py"
+    worker.write_text(
+        "import os, sys, time\n"
+        "from pathlib import Path\n"
+        "sys.stdin.buffer.read()\n"
+        f"Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+        "time.sleep(60)\n"
+    )
+    monkeypatch.setattr(main, "WORKER_SCRIPT", worker)
+    monkeypatch.setattr(request_limits, "VALIDATION_TIMEOUT_SECONDS", 1.0)
+
+    async def run():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=main.app), base_url="http://test"
+        ) as client:
+            first = asyncio.create_task(client.post(
+                "/api/dbt/validate",
+                files={"file": ("sample.xml", SAMPLE.read_bytes())},
+            ))
+            for _ in range(100):
+                if pid_file.exists():
+                    break
+                await asyncio.sleep(0.01)
+            assert pid_file.exists()
+
+            busy = await client.post(
+                "/api/parse",
+                files={"file": ("sample.xml", SAMPLE.read_bytes())},
+            )
+            assert busy.status_code == 429
+
+            timed_out = await first
+            assert timed_out.status_code == 504
+            assert "1-second time limit" in timed_out.json()["error"]
+            recovered = await client.post(
+                "/upload",
+                files={"file": ("sample.xml", b"<POWERMART/>")},
             )
             assert recovered.status_code == 200
 
