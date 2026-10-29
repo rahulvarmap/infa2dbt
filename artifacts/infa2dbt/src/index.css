@@ -996,6 +996,23 @@ input:focus-visible,
 .sample-button { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 13px; border: 1px solid hsl(var(--border)); border-radius: 8px; background: hsl(var(--card)); color: hsl(var(--foreground)); font-size: 12px; font-weight: 600; cursor: pointer; flex: 0 0 auto; }
 .sample-button:hover:not(:disabled) { border-color: hsl(var(--primary) / 0.55); }
 .sample-button:disabled, .remove-file:disabled { opacity: 0.47; cursor: not-allowed; }
+.project-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding-bottom: 12px; }
+.validation-results { margin: 0 0 16px; padding: 16px; border: 1px solid hsl(var(--border)); border-radius: 10px; background: hsl(var(--card) / 0.72); }
+.validation-heading, .validation-model-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.validation-heading { font-size: 14px; }
+.validation-status, .validation-step-status, .validation-model-status { border-radius: 999px; padding: 3px 8px; background: hsl(var(--muted)); color: hsl(var(--muted-foreground)); font-family: var(--app-font-mono); font-size: 10px; text-transform: uppercase; }
+.validation-status[data-status='passed'], .validation-step[data-status='passed'] .validation-step-status, .validation-model[data-status='passed'] .validation-model-status { color: hsl(145 55% 34%); background: hsl(145 55% 45% / 0.12); }
+.validation-status[data-status='failed'], .validation-step[data-status='failed'] .validation-step-status, .validation-model[data-status='failed'] .validation-model-status { color: hsl(var(--destructive)); background: hsl(var(--destructive) / 0.1); }
+.validation-status[data-status='blocked'], .validation-model[data-status='blocked'] .validation-model-status { color: hsl(35 75% 38%); background: hsl(35 75% 50% / 0.14); }
+.validation-caption, .validation-model-meta { margin: 6px 0 0; color: hsl(var(--muted-foreground)); font-size: 11px; line-height: 1.5; }
+.validation-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 14px; }
+.validation-step { display: flex; align-items: center; justify-content: space-between; gap: 7px; min-width: 0; padding: 9px; border: 1px solid hsl(var(--border)); border-radius: 8px; }
+.validation-step-name { font-family: var(--app-font-mono); font-size: 11px; text-transform: capitalize; }
+.validation-subhead { margin: 15px 0 7px; font-family: var(--app-font-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; }
+.validation-model-list { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.validation-model { min-width: 0; padding: 10px; border: 1px solid hsl(var(--border)); border-radius: 8px; }
+.validation-model-name { overflow-wrap: anywhere; font-family: var(--app-font-mono); font-size: 11px; }
+.validation-model-message { margin: 8px 0 0; color: hsl(var(--destructive)); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
 .inspector-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 14px; }
 .inspector-select { max-width: 100%; min-height: 36px; padding: 0 10px; border: 1px solid hsl(var(--input)); border-radius: 8px; background: hsl(var(--card)); color: hsl(var(--foreground)); font-family: var(--app-font-mono); font-size: 12px; margin-bottom: 12px; }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid hsl(var(--border)); margin-bottom: 18px; }
@@ -1020,6 +1037,7 @@ input:focus-visible,
 .raw-json { margin: 12px 0 0; max-height: 480px; overflow: auto; padding: 14px; border-radius: 9px; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); font-family: var(--app-font-mono); font-size: 11px; white-space: pre-wrap; word-break: break-word; }
 @keyframes pulse { 50% { opacity: 0.5; } }
 @media (max-width: 640px) { .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .inspector { padding: 14px; } }
+@media (max-width: 640px) { .project-actions { display: grid; grid-template-columns: 1fr; } .project-actions .sample-button { justify-content: center; width: 100%; } .validation-results { padding: 12px; } .validation-steps { grid-template-columns: 1fr; } }
 
 /* Lineage graph */
 :root { --k-source: 213 75% 40%; --k-qualifier: 282 55% 42%; --k-expression: 151 55% 30%; --k-filter: 32 70% 40%; --k-joiner: 188 60% 33%; --k-lookup: 340 38% 44%; --k-aggregator: 12 55% 45%; --k-target: 224 38% 30%; --k-unknown: 210 8% 48%; }

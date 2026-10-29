@@ -267,6 +267,40 @@ async def download_dbt_project(request: Request) -> Response:
     )
 
 
+@app.post("/dbt/validate")
+@app.post("/api/dbt/validate")
+async def validate_dbt_project(request: Request) -> JSONResponse:
+    upload = await read_xml_upload(
+        request,
+        allowed_fields={"sample_name"},
+        require_file=False,
+    )
+    if isinstance(upload, JSONResponse):
+        return upload
+    _, file_contents, fields = upload
+    sample_name = fields.get("sample_name")
+    if (file_contents is None) == (sample_name is None):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Provide exactly one XML file or sample_name."},
+        )
+    if file_contents is not None:
+        contents = file_contents
+    else:
+        assert sample_name is not None
+        path = sample_files().get(sample_name)
+        if path is None:
+            return JSONResponse(status_code=404, content={"error": "Sample not found."})
+        with path.open("rb") as sample:
+            contents = sample.read(MAX_FILE_SIZE + 1)
+        if len(contents) > MAX_FILE_SIZE:
+            return JSONResponse(
+                status_code=413,
+                content={"error": "Sample must be 5 MB or smaller."},
+            )
+    return await process_in_worker(contents, {"mode": "validate"})
+
+
 @app.post("/lineage/trace")
 @app.post("/api/lineage/trace")
 async def trace_lineage(request: Request) -> JSONResponse:

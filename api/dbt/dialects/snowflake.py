@@ -14,13 +14,20 @@ from api.parser.expressions import (
     UnaryOperator,
 )
 from api.parser.identifiers import normalize_identifier
+from .base import UnsupportedDialectFunction, UnsupportedDialectType
 
 
-class UnsupportedSnowflakeType(ValueError):
+name = "snowflake"
+project_name = "infa2dbt_snowflake"
+profile_name = "infa2dbt"
+profile_type = "snowflake"
+
+
+class UnsupportedSnowflakeType(UnsupportedDialectType):
     """Raised when an Informatica datatype has no safe Snowflake mapping."""
 
 
-class UnsupportedSnowflakeFunction(ValueError):
+class UnsupportedSnowflakeFunction(UnsupportedDialectFunction):
     """Raised when a function has no supported Snowflake translation."""
 
 
@@ -339,3 +346,6 @@ def snowflake_type(datatype: str, precision: str = "", scale: str = "") -> str:
     raise UnsupportedSnowflakeType(
         f"Informatica datatype '{datatype}' has no Snowflake mapping."
     )
+
+
+data_type = snowflake_type

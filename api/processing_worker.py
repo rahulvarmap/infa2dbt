@@ -15,7 +15,7 @@ from api.parser.identifiers import normalize_identifier
 from api.parser.lineage import LineageGraph, mapping_key
 from api.parser.models import Diagnostic, LineageData, ParseResponse, TraceResponse
 from api.request_limits import MAX_MAPPINGS
-from api.dbt import build_project, zip_project
+from api.dbt import build_project, validate_project, zip_project
 
 
 class MappingLimitExceeded(ValueError):
@@ -111,6 +111,12 @@ def process_xml_request(
                     "blocked_models": project.blocked_models,
                     "diagnostics": project.diagnostics,
                 },
+            }
+
+        if mode == "validate":
+            return {
+                "status_code": 200,
+                "content": validate_project(result),
             }
 
         return {"status_code": 500, "content": {"error": "Invalid processing mode."}}

@@ -34,6 +34,21 @@ import type { ReactNode } from 'react';
 const queryClient = new QueryClient();
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
 
+type ValidationReport = {
+  status: 'passed' | 'failed' | 'blocked' | string;
+  dialect: string;
+  steps: Array<{ name: string; command: string; status: string; message: string }>;
+  models: Array<{
+    name: string;
+    kind: string;
+    path: string;
+    status: string;
+    phase: string;
+    message: string;
+    row_count: number | null;
+  }>;
+};
+
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} bytes`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -68,6 +83,9 @@ function Home() {
   const [activeSample, setActiveSample] = useState<string | null>(null);
   const [generatingProject, setGeneratingProject] = useState(false);
   const [generationError, setGenerationError] = useState('');
+  const [validatingProject, setValidatingProject] = useState(false);
+  const [validationReport, setValidationReport] = useState<ValidationReport | null>(null);
+  const [validationReportError, setValidationReportError] = useState('');
   const busy = upload.isPending || parseXml.isPending || parseSample.isPending;
 
   useEffect(() => {
@@ -88,6 +106,8 @@ function Home() {
   function selectFile(candidate: File | undefined) {
     setValidationError('');
     setGenerationError('');
+    setValidationReport(null);
+    setValidationReportError('');
     if (busy) return;
     setResult(null);
     setParsed(null); setParsedSource(null);
@@ -125,6 +145,8 @@ function Home() {
     setResult(null);
     setParsed(null); setParsedSource(null);
     setGenerationError('');
+    setValidationReport(null);
+    setValidationReportError('');
     parseXml.reset();
     parseSample.reset();
     try {
@@ -145,6 +167,8 @@ function Home() {
     setResult(null);
     setParsed(null); setParsedSource(null);
     setGenerationError('');
+    setValidationReport(null);
+    setValidationReportError('');
     setFile(null);
     upload.reset();
     parseXml.reset();
@@ -162,7 +186,7 @@ function Home() {
   }
 
   async function onDownloadDbtProject() {
-    if (!parsedSource || generatingProject) return;
+    if (!parsedSource || generatingProject || validatingProject) return;
     setGenerationError('');
     setGeneratingProject(true);
     const form = new FormData();
@@ -201,6 +225,40 @@ function Home() {
     }
   }
 
+  async function onValidateDbtProject() {
+    if (!parsedSource || generatingProject || validatingProject) return;
+    setValidationReport(null);
+    setValidationReportError('');
+    setValidatingProject(true);
+    const form = new FormData();
+    if (parsedSource.kind === 'file') {
+      form.append('file', parsedSource.file);
+    } else {
+      form.append('sample_name', parsedSource.name);
+    }
+    try {
+      const response = await fetch('/api/dbt/validate', {
+        method: 'POST',
+        body: form,
+      });
+      const payload = await response.json().catch(() => null) as ValidationReport | { error?: string } | null;
+      if (!response.ok) {
+        const error = payload && 'error' in payload ? payload.error : undefined;
+        throw new Error(error || 'DuckDB validation could not be completed.');
+      }
+      if (!payload || !('models' in payload) || !('steps' in payload)) {
+        throw new Error('The server returned an invalid validation report.');
+      }
+      setValidationReport(payload);
+    } catch (error) {
+      setValidationReportError(
+        error instanceof Error ? error.message : 'DuckDB validation could not be completed.',
+      );
+    } finally {
+      setValidatingProject(false);
+    }
+  }
+
   function clearFile() {
     if (busy) return;
     setFile(null);
@@ -208,6 +266,8 @@ function Home() {
     setParsed(null); setParsedSource(null);
     setValidationError('');
     setGenerationError('');
+    setValidationReport(null);
+    setValidationReportError('');
     upload.reset();
     parseXml.reset();
     parseSample.reset();
@@ -410,12 +470,12 @@ function Home() {
             <div className="section-rule">Parsed mapping</div>
             {parsed ? (
               <>
-                <div className="flex flex-col items-end gap-2 pb-3 sm:flex-row sm:justify-end">
+                <div className="project-actions">
                   <button
                     type="button"
                     className="sample-button flex items-center gap-2"
                     onClick={() => { void onDownloadDbtProject(); }}
-                    disabled={generatingProject || !parsedSource}
+                    disabled={generatingProject || validatingProject || !parsedSource}
                     data-testid="button-download-dbt-project"
                   >
                     {generatingProject
@@ -423,12 +483,88 @@ function Home() {
                       : <Download size={14} />}
                     {generatingProject ? 'Building dbt project…' : 'Download dbt project'}
                   </button>
+                  <button
+                    type="button"
+                    className="sample-button flex items-center gap-2"
+                    onClick={() => { void onValidateDbtProject(); }}
+                    disabled={generatingProject || validatingProject || !parsedSource}
+                    data-testid="button-validate-dbt-project"
+                  >
+                    {validatingProject
+                      ? <LoaderCircle size={14} className="animate-spin" />
+                      : <Check size={14} />}
+                    {validatingProject ? 'Validating with DuckDB…' : 'Validate with DuckDB'}
+                  </button>
                 </div>
                 {generationError && (
                   <div className="error-message mb-3" role="alert" data-testid="error-dbt-project">
                     <AlertCircle size={17} className="mt-0.5 shrink-0" />
                     <span>{generationError}</span>
                   </div>
+                )}
+                {validationReportError && (
+                  <div className="error-message mb-3" role="alert" data-testid="error-dbt-validation">
+                    <AlertCircle size={17} className="mt-0.5 shrink-0" />
+                    <span>{validationReportError}</span>
+                  </div>
+                )}
+                {validationReport && (
+                  <section
+                    className="validation-results"
+                    data-testid="dbt-validation-results"
+                    aria-label="DuckDB validation results"
+                  >
+                    <div className="validation-heading">
+                      <strong>DuckDB validation</strong>
+                      <span className="validation-status" data-status={validationReport.status}>
+                        {validationReport.status}
+                      </span>
+                    </div>
+                    <p className="validation-caption">
+                      Generated models were seeded with synthetic data, then compiled and run.
+                      This checks local DuckDB behavior; it does not certify Snowflake runtime results.
+                    </p>
+                    <div className="validation-steps" aria-label="Validation steps">
+                      {validationReport.steps.map((step) => (
+                        <div
+                          key={step.name}
+                          className="validation-step"
+                          data-testid={`validation-step-${step.name}`}
+                          data-status={step.status}
+                        >
+                          <span className="validation-step-name">{step.name}</span>
+                          <span className="validation-step-status">{step.status}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <h3 className="validation-subhead">Per-model results</h3>
+                    {validationReport.models.length > 0 ? (
+                      <ul className="validation-model-list">
+                        {validationReport.models.map((model) => (
+                          <li
+                            key={model.path}
+                            className="validation-model"
+                            data-testid={`validation-model-${model.name}`}
+                            data-status={model.status}
+                          >
+                            <div className="validation-model-head">
+                              <span className="validation-model-name">{model.name}</span>
+                              <span className="validation-model-status">{model.status}</span>
+                            </div>
+                            <p className="validation-model-meta">
+                              {model.kind}{model.row_count === null ? '' : ` · ${model.row_count} rows`}
+                              {model.phase ? ` · ${model.phase}` : ''}
+                            </p>
+                            {(model.status === 'failed' || model.status === 'blocked') && model.message && (
+                              <p className="validation-model-message">{model.message}</p>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="validation-caption">No models were generated for validation.</p>
+                    )}
+                  </section>
                 )}
                 <ParseInspector key={parsedLabel + String(parsed.mappings.length)} data={parsed} label={parsedLabel} source={parsedSource} />
               </>

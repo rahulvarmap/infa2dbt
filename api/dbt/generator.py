@@ -40,24 +40,13 @@ from api.parser.models import (
 from api.parser.order import topological_order
 
 from .dependency_lock import DBT_REQUIREMENTS_LOCK
-from .dialects.snowflake import (
-    UnsupportedSnowflakeFunction,
-    UnsupportedSnowflakeType,
-    render_binary,
-    render_concat,
-    render_function,
-    render_literal,
-    render_predicate,
-    render_unary,
-    sql_identifier,
-    snowflake_type,
-)
+from .dialects import get_dialect
+from .dialects.base import SqlDialect, UnsupportedDialectFunction, UnsupportedDialectType
 from .predicates import parse_simple_predicate
 
 
 DBT_CORE_VERSION = "1.12.6"
 DBT_SNOWFLAKE_VERSION = "1.12.4"
-PROJECT_NAME = "infa2dbt_snowflake"
 SUPPORTED_TRANSFORMATIONS = {"source qualifier", "expression", "filter"}
 
 
@@ -66,6 +55,14 @@ class DbtProject:
     files: dict[str, str]
     diagnostics: list[dict]
     blocked_models: list[dict]
+    seed_tables: list["SeedTable"] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SeedTable:
+    filename: str
+    identifier: str
+    source: Source
 
 
 @dataclass(frozen=True)
@@ -74,6 +71,7 @@ class _SourceInfo:
     source: Source
     group_name: str
     stage_name: str
+    seed_identifier: str
 
 
 @dataclass(frozen=True)
@@ -201,46 +199,48 @@ def _concat_expression_terms(expression: Expression) -> list[Expression]:
 def _render_expression(
     expression: Expression,
     resolve_port: Callable[[PortReference], str],
+    dialect: SqlDialect,
 ) -> str:
     if isinstance(expression, Literal):
-        return render_literal(expression)
+        return dialect.render_literal(expression)
     if isinstance(expression, VariablePortReference):
         return resolve_port(expression)
     if isinstance(expression, PortReference):
         return resolve_port(expression)
     if isinstance(expression, UnaryOperator):
-        return render_unary(
+        return dialect.render_unary(
             expression.operator,
-            _render_expression(expression.operand, resolve_port),
+            _render_expression(expression.operand, resolve_port, dialect),
         )
     if isinstance(expression, BinaryOperator):
         if expression.operator == "||":
-            return render_concat([
-                _render_expression(term, resolve_port)
+            return dialect.render_concat([
+                _render_expression(term, resolve_port, dialect)
                 for term in _concat_expression_terms(expression)
             ])
-        return render_binary(
+        return dialect.render_binary(
             expression.operator,
-            _render_expression(expression.left, resolve_port),
-            _render_expression(expression.right, resolve_port),
+            _render_expression(expression.left, resolve_port, dialect),
+            _render_expression(expression.right, resolve_port, dialect),
         )
     if isinstance(expression, ListExpression):
         values = ", ".join(
-            _render_expression(item, resolve_port) for item in expression.values
+            _render_expression(item, resolve_port, dialect) for item in expression.values
         )
         return f"({values})"
     if isinstance(expression, FunctionCall):
         arguments = [
-            _render_expression(argument, resolve_port)
+            _render_expression(argument, resolve_port, dialect)
             for argument in expression.arguments
         ]
-        return render_function(expression, arguments)
+        return dialect.render_function(expression, arguments)
     raise ValueError(f"Unsupported expression AST node: {type(expression).__name__}.")
 
 
 class _ProjectBuilder:
-    def __init__(self, result: ParseResult):
+    def __init__(self, result: ParseResult, dialect: SqlDialect):
         self.result = result
+        self.dialect = dialect
         self.files: dict[str, str] = {}
         self.diagnostics: list[dict] = [
             _format_diagnostic(item) for item in validate_parse_result(result)
@@ -318,8 +318,8 @@ class _ProjectBuilder:
                 f"Source filter references unconnected column '{reference.name}'."
             )
         return (
-            f"{sql_identifier(relation_alias, context='relation')}."
-            f"{sql_identifier(output_name)}"
+            f"{self.dialect.sql_identifier(relation_alias, context='relation')}."
+            f"{self.dialect.sql_identifier(output_name)}"
         )
 
     def _index_source_filters(self) -> dict[tuple[str, str], _SourceFilterSpec]:
@@ -450,6 +450,7 @@ class _ProjectBuilder:
                 source=source,
                 group_name=group_names[group_keys[identity]],
                 stage_name=stage_names[identity],
+                seed_identifier=f"seed_{stage_names[identity]}",
             )
             for identity, source in sources.items()
         }
@@ -514,8 +515,10 @@ class _ProjectBuilder:
             projections = []
             for field in sorted(source.fields, key=lambda item: normalize_identifier(item.name)):
                 try:
-                    data_type = snowflake_type(field.datatype, field.precision, field.scale)
-                except UnsupportedSnowflakeType as error:
+                    data_type = self.dialect.data_type(
+                        field.datatype, field.precision, field.scale
+                    )
+                except UnsupportedDialectType as error:
                     block = _Block(
                         "UNSUPPORTED_SOURCE_DATATYPE",
                         str(error),
@@ -529,8 +532,8 @@ class _ProjectBuilder:
                     )
                     continue
                 projections.append(
-                    f"  cast(src.{sql_identifier(field.name)} as {data_type}) "
-                    f"as {sql_identifier(snake_case(field.name))}"
+                    f"  cast(src.{self.dialect.sql_identifier(field.name)} as {data_type}) "
+                    f"as {self.dialect.sql_identifier(snake_case(field.name))}"
                 )
             if not source.fields:
                 blocks.append(_Block(
@@ -574,8 +577,15 @@ class _ProjectBuilder:
             lines.extend([
                 f"  - name: {json.dumps(group)}",
                 f"    description: {json.dumps(f'PowerCenter sources from {sample.repository}/{sample.folder}')}",
-                '    database: "{{ var(\'source_database\', \'RAW\') }}"',
-                '    schema: "{{ var(\'source_schema\', \'PUBLIC\') }}"',
+            ])
+            if self.dialect.name == "snowflake":
+                lines.extend([
+                    '    database: "{{ var(\'source_database\', \'RAW\') }}"',
+                    '    schema: "{{ var(\'source_schema\', \'PUBLIC\') }}"',
+                ])
+            else:
+                lines.append("    schema: main")
+            lines.extend([
                 "    quoting:",
                 "      identifier: true",
                 "    tables:",
@@ -585,6 +595,10 @@ class _ProjectBuilder:
                     f"      - name: {json.dumps(info.source.name)}",
                     f"        description: {json.dumps(f'PowerCenter source {info.source.name}')}",
                 ])
+                if self.dialect.name == "duckdb":
+                    lines.append(
+                        f"        identifier: {json.dumps(info.seed_identifier)}"
+                    )
         return "\n".join(lines) + "\n"
 
     def _schema_yml(self, target_entries: list[dict]) -> str:
@@ -608,22 +622,35 @@ class _ProjectBuilder:
                 lines.append("    columns:")
                 for item in sorted(fields, key=lambda field: normalize_identifier(field.name)):
                     try:
-                        mapped_type = snowflake_type(item.datatype, item.precision, item.scale)
-                    except UnsupportedSnowflakeType:
+                        mapped_type = self.dialect.data_type(
+                            item.datatype, item.precision, item.scale
+                        )
+                    except UnsupportedDialectType:
                         mapped_type = "UNSUPPORTED"
                     column_name = snake_case(item.name)
+                    type_label = (
+                        "Snowflake" if self.dialect.name == "snowflake" else "DuckDB"
+                    )
                     lines.extend([
                         f"      - name: {json.dumps(column_name)}",
-                        f"        description: {json.dumps(f'PowerCenter field {item.name}; Snowflake type {mapped_type}.')}",
+                        f"        description: {json.dumps(f'PowerCenter field {item.name}; {type_label} type {mapped_type}.')}",
                     ])
         return "\n".join(lines) + "\n"
 
     def _dbt_files(self) -> None:
+        project_name = self.dialect.project_name
+        profile_name = self.dialect.profile_name
+        vars_section = (
+            "vars:\n"
+            "  source_database: RAW\n"
+            "  source_schema: PUBLIC\n"
+            if self.dialect.name == "snowflake" else ""
+        )
         self.files["dbt_project.yml"] = (
-            f"name: {PROJECT_NAME}\n"
+            f"name: {project_name}\n"
             "version: '1.0.0'\n"
             "config-version: 2\n"
-            "profile: infa2dbt\n"
+            f"profile: {profile_name}\n"
             "model-paths: ['models']\n"
             "analysis-paths: ['analyses']\n"
             "test-paths: ['tests']\n"
@@ -632,43 +659,58 @@ class _ProjectBuilder:
             "snapshot-paths: ['snapshots']\n"
             "target-path: 'target'\n"
             "clean-targets: ['target', 'dbt_packages']\n"
-            "vars:\n"
-            "  source_database: RAW\n"
-            "  source_schema: PUBLIC\n"
+            f"{vars_section}"
             "models:\n"
-            f"  {PROJECT_NAME}:\n"
+            f"  {project_name}:\n"
             "    +materialized: view\n"
         )
-        self.files["profiles.yml"] = (
-            "infa2dbt:\n"
-            "  target: dev\n"
-            "  outputs:\n"
-            "    dev:\n"
-            "      type: snowflake\n"
-            "      account: <your-account>\n"
-            "      user: <your-user>\n"
-            "      password: <your-password>\n"
-            "      role: <your-role>\n"
-            "      database: <your-database>\n"
-            "      warehouse: <your-warehouse>\n"
-            "      schema: <your-schema>\n"
-            "      threads: 1\n"
-        )
-        self.files["requirements.txt"] = (
-            f"dbt-core=={DBT_CORE_VERSION}\n"
-            f"dbt-snowflake=={DBT_SNOWFLAKE_VERSION}\n"
-        )
-        self.files["requirements.lock"] = DBT_REQUIREMENTS_LOCK
-        self.files["README.md"] = (
-            "# Generated Snowflake dbt project\n\n"
-            "Generated models use views by default. Review `diagnostics.json` before running "
-            "the project; blocked models are intentionally non-functional placeholders.\n\n"
-            "Copy `profiles.yml` to your local dbt profiles directory and replace every "
-            "placeholder with your own Snowflake connection values. Do not commit credentials.\n\n"
-            "Install the fully pinned environment with `python -m pip install -r requirements.lock`. "
-            "`requirements.txt` lists the direct dbt dependencies. "
-            "Run `dbt parse` from this project directory.\n"
-        )
+        if self.dialect.name == "snowflake":
+            self.files["profiles.yml"] = (
+                "infa2dbt:\n"
+                "  target: dev\n"
+                "  outputs:\n"
+                "    dev:\n"
+                "      type: snowflake\n"
+                "      account: <your-account>\n"
+                "      user: <your-user>\n"
+                "      password: <your-password>\n"
+                "      role: <your-role>\n"
+                "      database: <your-database>\n"
+                "      warehouse: <your-warehouse>\n"
+                "      schema: <your-schema>\n"
+                "      threads: 1\n"
+            )
+            self.files["requirements.txt"] = (
+                f"dbt-core=={DBT_CORE_VERSION}\n"
+                f"dbt-snowflake=={DBT_SNOWFLAKE_VERSION}\n"
+            )
+            self.files["requirements.lock"] = DBT_REQUIREMENTS_LOCK
+            self.files["README.md"] = (
+                "# Generated Snowflake dbt project\n\n"
+                "Generated models use views by default. Review `diagnostics.json` before running "
+                "the project; blocked models are intentionally non-functional placeholders.\n\n"
+                "Copy `profiles.yml` to your local dbt profiles directory and replace every "
+                "placeholder with your own Snowflake connection values. Do not commit credentials.\n\n"
+                "Install the fully pinned environment with `python -m pip install -r requirements.lock`. "
+                "`requirements.txt` lists the direct dbt dependencies. "
+                "Run `dbt parse` from this project directory.\n"
+            )
+        else:
+            self.files["profiles.yml"] = (
+                f"{profile_name}:\n"
+                "  target: dev\n"
+                "  outputs:\n"
+                "    dev:\n"
+                "      type: duckdb\n"
+                "      path: validation.duckdb\n"
+                "      schema: main\n"
+                "      threads: 1\n"
+            )
+            self.files["README.md"] = (
+                "# Generated DuckDB validation project\n\n"
+                "This temporary project uses synthetic seed data for local validation. "
+                "It is not the Snowflake download project.\n"
+            )
 
     def _mapping_relations(
         self,
@@ -855,7 +897,7 @@ class _ProjectBuilder:
                         "Source Filter",
                     ))
                 try:
-                    source_filter_sql = render_predicate(
+                    source_filter_sql = self.dialect.render_predicate(
                         source_filter.expression,
                         lambda reference: self._source_filter_relation_column(
                             parent_relation,
@@ -899,7 +941,7 @@ class _ProjectBuilder:
                             candidate.expression,
                             variable_ports=variable_ports,
                         )
-                        return _render_expression(nested, resolve_port)
+                        return _render_expression(nested, resolve_port, self.dialect)
                     except ExpressionSyntaxError as error:
                         raise _GenerationBlocked(_Block(
                             "INVALID_EXPRESSION",
@@ -907,7 +949,7 @@ class _ProjectBuilder:
                             instance.name,
                             candidate.name,
                         )) from error
-                    except UnsupportedSnowflakeFunction as error:
+                    except UnsupportedDialectFunction as error:
                         raise _GenerationBlocked(_Block(
                             "UNSUPPORTED_EXPRESSION_FUNCTION",
                             str(error),
@@ -947,8 +989,8 @@ class _ProjectBuilder:
                             reference.name,
                         ))
                     return (
-                        f"{sql_identifier(relation_alias, context='relation')}."
-                        f"{sql_identifier(output_name)}"
+                        f"{self.dialect.sql_identifier(relation_alias, context='relation')}."
+                        f"{self.dialect.sql_identifier(output_name)}"
                     )
 
                 if (
@@ -969,7 +1011,7 @@ class _ProjectBuilder:
                             candidate.expression,
                             variable_ports=variable_ports,
                         )
-                        return _render_expression(nested, resolve_port)
+                        return _render_expression(nested, resolve_port, self.dialect)
                     except ExpressionSyntaxError as error:
                         raise _GenerationBlocked(_Block(
                             "INVALID_EXPRESSION",
@@ -977,7 +1019,7 @@ class _ProjectBuilder:
                             instance.name,
                             candidate.name,
                         )) from error
-                    except UnsupportedSnowflakeFunction as error:
+                    except UnsupportedDialectFunction as error:
                         raise _GenerationBlocked(_Block(
                             "UNSUPPORTED_EXPRESSION_FUNCTION",
                             str(error),
@@ -991,8 +1033,8 @@ class _ProjectBuilder:
                     output_name = parent_relation.columns.get(ref_key)
                     if output_name is not None:
                         return (
-                            f"{sql_identifier(relation_alias, context='relation')}."
-                            f"{sql_identifier(output_name)}"
+                            f"{self.dialect.sql_identifier(relation_alias, context='relation')}."
+                            f"{self.dialect.sql_identifier(output_name)}"
                         )
                 raise _GenerationBlocked(_Block(
                     "UNRESOLVED_EXPRESSION_PORT",
@@ -1019,12 +1061,14 @@ class _ProjectBuilder:
                 if port.expression:
                     try:
                         ast = parse_expression(port.expression, variable_ports=variable_ports)
-                        expression_sql = _render_expression(ast, resolve_port)
+                        expression_sql = _render_expression(
+                            ast, resolve_port, self.dialect
+                        )
                     except ExpressionSyntaxError as error:
                         raise _GenerationBlocked(_Block(
                             "INVALID_EXPRESSION", str(error), instance.name, port.name
                         )) from error
-                    except UnsupportedSnowflakeFunction as error:
+                    except UnsupportedDialectFunction as error:
                         raise _GenerationBlocked(_Block(
                             "UNSUPPORTED_EXPRESSION_FUNCTION",
                             str(error),
@@ -1036,7 +1080,7 @@ class _ProjectBuilder:
                 output_name = snake_case(port.name)
                 columns[normalize_identifier(port.name)] = output_name
                 projections.append(
-                    f"    {expression_sql} as {sql_identifier(output_name)}"
+                    f"    {expression_sql} as {self.dialect.sql_identifier(output_name)}"
                 )
 
             where_sql = ""
@@ -1056,14 +1100,16 @@ class _ProjectBuilder:
                     ))
                 try:
                     condition_ast = parse_expression(condition, variable_ports=variable_ports)
-                    where_sql = _render_expression(condition_ast, resolve_port)
+                    where_sql = _render_expression(
+                        condition_ast, resolve_port, self.dialect
+                    )
                 except ExpressionSyntaxError as error:
                     raise _GenerationBlocked(_Block(
                         "INVALID_FILTER_EXPRESSION",
                         str(error),
                         instance.name,
                     )) from error
-                except UnsupportedSnowflakeFunction as error:
+                except UnsupportedDialectFunction as error:
                     raise _GenerationBlocked(_Block(
                         "UNSUPPORTED_FILTER_FUNCTION",
                         str(error),
@@ -1074,13 +1120,15 @@ class _ProjectBuilder:
             if parent_relation is None:
                 body = ",\n".join(projections)
                 cte_sql = (
-                    f"{sql_identifier(cte_name, context='relation')} as "
+                    f"{self.dialect.sql_identifier(cte_name, context='relation')} as "
                     f"(\n  select\n{body}\n)"
                 )
             else:
                 from_sql = parent_relation.sql
                 if parent_relation.is_cte:
-                    from_sql = sql_identifier(from_sql, context="relation")
+                    from_sql = self.dialect.sql_identifier(
+                        from_sql, context="relation"
+                    )
                 body = ",\n".join(projections)
                 where_conditions = [
                     condition for condition in (source_filter_sql, where_sql)
@@ -1091,10 +1139,10 @@ class _ProjectBuilder:
                     if where_conditions else ""
                 )
                 cte_sql = (
-                    f"{sql_identifier(cte_name, context='relation')} as (\n"
+                    f"{self.dialect.sql_identifier(cte_name, context='relation')} as (\n"
                     f"  select\n{body}\n"
                     f"  from {from_sql} as "
-                    f"{sql_identifier(relation_alias, context='relation')}"
+                    f"{self.dialect.sql_identifier(relation_alias, context='relation')}"
                     f"{where_clause}\n)"
                 )
             ctes.append(cte_sql)
@@ -1110,8 +1158,10 @@ class _ProjectBuilder:
             target_definition.fields, key=lambda item: normalize_identifier(item.name)
         ):
             try:
-                snowflake_type(field_item.datatype, field_item.precision, field_item.scale)
-            except UnsupportedSnowflakeType as error:
+                self.dialect.data_type(
+                    field_item.datatype, field_item.precision, field_item.scale
+                )
+            except UnsupportedDialectType as error:
                 raise _GenerationBlocked(_Block(
                     "UNSUPPORTED_TARGET_DATATYPE",
                     str(error),
@@ -1146,9 +1196,9 @@ class _ProjectBuilder:
             target_alias = snake_case(field_item.name)
             target_fields.append(field_item)
             target_projections.append(
-                f"  {sql_identifier('target_input', context='relation')}."
-                f"{sql_identifier(relation_field)} "
-                f"as {sql_identifier(target_alias)}"
+                f"  {self.dialect.sql_identifier('target_input', context='relation')}."
+                f"{self.dialect.sql_identifier(relation_field)} "
+                f"as {self.dialect.sql_identifier(target_alias)}"
             )
         if not target_projections:
             raise _GenerationBlocked(_Block(
@@ -1168,7 +1218,7 @@ class _ProjectBuilder:
         ]
         from_sql = target_input.sql
         if target_input.is_cte:
-            from_sql = sql_identifier(from_sql, context="relation")
+            from_sql = self.dialect.sql_identifier(from_sql, context="relation")
         cte_prefix = "with\n" + ",\n".join(ctes) + "\n\n" if ctes else ""
         target_select = ",\n".join(target_projections)
         return (
@@ -1176,7 +1226,7 @@ class _ProjectBuilder:
             f"{cte_prefix}select\n"
             f"{target_select}\n"
             f"from {from_sql} as "
-            f"{sql_identifier('target_input', context='relation')}\n"
+            f"{self.dialect.sql_identifier('target_input', context='relation')}\n"
         )
 
     def _build_targets(self) -> list[dict]:
@@ -1268,20 +1318,35 @@ class _ProjectBuilder:
         self.blocked_models.sort(key=lambda item: (item["path"], item["mapping"]))
         self.files["diagnostics.json"] = json.dumps({
             "format_version": 1,
-            "warehouse": "snowflake",
+            "warehouse": self.dialect.name,
             "blocked_models": self.blocked_models,
             "diagnostics": self.diagnostics,
         }, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        seed_tables = (
+            [
+                SeedTable(
+                    filename=f"{info.seed_identifier}.csv",
+                    identifier=info.seed_identifier,
+                    source=info.source,
+                )
+                for info in self.source_info.values()
+            ]
+            if self.dialect.name == "duckdb" else []
+        )
         return DbtProject(
             files=dict(sorted(self.files.items())),
             diagnostics=self.diagnostics,
             blocked_models=self.blocked_models,
+            seed_tables=seed_tables,
         )
 
 
-def build_project(result: ParseResult) -> DbtProject:
-    """Build the deterministic dbt files for a parsed PowerCenter export."""
-    return _ProjectBuilder(result).build()
+def build_project(
+    result: ParseResult,
+    dialect: str = "snowflake",
+) -> DbtProject:
+    """Build deterministic dbt files, using Snowflake unless another dialect is selected."""
+    return _ProjectBuilder(result, get_dialect(dialect)).build()
 
 
 def zip_project(files: dict[str, str]) -> bytes:
