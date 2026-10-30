@@ -406,6 +406,24 @@ def test_lookup_report_error_and_unsupported_policies_block_with_diagnostics():
         assert any(item["code"] == code for item in project.diagnostics)
 
 
+def test_lookup_non_equi_condition_is_blocked_with_diagnostic():
+    xml = (SAMPLES_DIR / "m_claims_provider_lookup.xml").read_bytes().replace(
+        b"INPUT.PROVIDER_ID = LOOKUP.LKP_PROVIDER_ID",
+        b"INPUT.PROVIDER_ID &lt; LOOKUP.LKP_PROVIDER_ID",
+    )
+    project = build_project(parse_powercenter_xml(xml))
+    assert project.files["models/marts/fact_claim_provider.sql"].startswith(
+        "-- BLOCKED MODEL:"
+    )
+    assert "NON_EQUI_LOOKUP_CONDITION" in project.blocked_models[0]["reasons"]
+    assert any(
+        item["code"] == "NON_EQUI_LOOKUP_CONDITION"
+        and item["instance"] == "LKP_PROVIDER"
+        and item["field"] == "Lookup Condition"
+        for item in project.diagnostics
+    )
+
+
 @pytest.mark.parametrize(
     "sample_path",
     sorted(SAMPLES_DIR.glob("*.xml")),

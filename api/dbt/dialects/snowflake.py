@@ -93,7 +93,7 @@ def lookup_relation(
         f"{sql_identifier(column)}"
         for column in partition_columns
     )
-    direction = "DESC" if last_value else "ASC"
+    direction = "DESC NULLS LAST" if last_value else "ASC NULLS FIRST"
     ordering = ", ".join(
         f"{sql_identifier(input_alias, context='relation')}."
         f"{sql_identifier(column)} {direction}"

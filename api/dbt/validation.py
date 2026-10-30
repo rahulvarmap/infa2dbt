@@ -105,15 +105,14 @@ def _synthetic_value(field: Field, row_index: int, reference: date) -> str | Non
 def synthetic_seed_rows(source: Source, reference: date | None = None) -> list[list[str | None]]:
     """Create repeatable representative rows, including NULLs and date boundaries."""
     reference = reference or datetime.now(timezone.utc).date()
-    overrides = _CLAIMS_MEMBER_SYNTHETIC_VALUES.get(
-        normalize_identifier(source.name), {}
-    )
-    overrides = {
-        **overrides,
-        **_CLAIMS_PROVIDER_LOOKUP_VALUES.get(
+    if normalize_identifier(source.folder) == "provider_demo":
+        overrides = _CLAIMS_PROVIDER_LOOKUP_VALUES.get(
             normalize_identifier(source.name), {}
-        ),
-    }
+        )
+    else:
+        overrides = _CLAIMS_MEMBER_SYNTHETIC_VALUES.get(
+            normalize_identifier(source.name), {}
+        )
     return [
         [
             overrides.get(normalize_identifier(field.name), ())[row_index]

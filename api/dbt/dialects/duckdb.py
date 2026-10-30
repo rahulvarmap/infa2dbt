@@ -85,7 +85,7 @@ def lookup_relation(
         f"{sql_identifier(column)}"
         for column in partition_columns
     )
-    direction = "DESC" if last_value else "ASC"
+    direction = "DESC NULLS LAST" if last_value else "ASC NULLS FIRST"
     ordering = ", ".join(
         f"{sql_identifier(input_alias, context='relation')}."
         f"{sql_identifier(column)} {direction}"
@@ -99,12 +99,12 @@ def lookup_relation(
         "      ROW_NUMBER() OVER (\n"
         f"        PARTITION BY {partitions}\n"
         f"        ORDER BY {ordering}\n"
-        "      ) as __lookup_row_number\n"
+        "      ) as lookup_row_number\n"
         f"    from {source_sql} as "
         f"{sql_identifier(input_alias, context='relation')}\n"
         f"  ) as {sql_identifier(ranked_alias, context='relation')}\n"
         f"  where {sql_identifier(ranked_alias, context='relation')}."
-        f"{sql_identifier('__lookup_row_number')} = 1\n"
+        f"{sql_identifier('lookup_row_number')} = 1\n"
         f") as {sql_identifier(output_alias, context='relation')}"
     )
 
