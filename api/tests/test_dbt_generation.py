@@ -9,6 +9,7 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 
+import duckdb
 import pytest
 
 from api.dbt import build_project, zip_project
@@ -19,6 +20,7 @@ from api.dbt.dialects.snowflake import (
     snowflake_type,
     sql_identifier,
 )
+from api.dbt.validation import execute_validation_workspace, prepare_validation_workspace
 from api.parser import parse_powercenter_xml
 from api.parser.expressions import FunctionCall, Literal, PortReference
 
@@ -95,9 +97,9 @@ def test_supported_subset_compiles_expression_ast_and_emits_dbt_refs():
     assert "IFF(" in target
     assert "ISNULL(" not in target
     assert "NVL(" in target
-    assert "LTRIM(RTRIM(__in.a))" in target
+    assert "LTRIM(RTRIM(src.a))" in target
     assert "LTRIM(RTRIM(A))" not in target
-    assert "where (__in.full_name IS NOT NULL)" in target
+    assert "where (src.full_name IS NOT NULL)" in target
     assert "models/sources.yml" in project.files
     assert "models/schema.yml" in project.files
 
@@ -128,7 +130,7 @@ def test_source_qualifier_filter_is_translated_in_mapping_cte():
 
     assert project.blocked_models == []
     assert "where" not in staging.lower()
-    assert "where ((__in.a IN ('x', 'y')) AND (__in.b NOT LIKE 'z%'))" in target
+    assert "where ((src.a IN ('x', 'y')) AND (src.b NOT LIKE 'z%'))" in target
     assert "{{ ref('stg_s') }}" in target
 
 
@@ -244,8 +246,8 @@ def test_sql_identifier_quotes_only_reserved_or_invalid_names():
 def test_generated_target_query_uses_unquoted_column_access():
     target = _project().files["models/marts/t.sql"]
     assert "sq as (" in target
-    assert "__in.a as a" in target
-    assert '"__in"."a"' not in target
+    assert "src.a as a" in target
+    assert '"src"."a"' not in target
     query = target.replace(
         "{{ ref('stg_s') }}",
         "(select 'Ada' as a, 'Lovelace' as b)",
@@ -294,6 +296,114 @@ def test_claims_member_sample_project_matches_golden_files():
         if path != "requirements.lock"
     } == expected
     assert files["requirements.lock"] == DBT_REQUIREMENTS_LOCK
+
+
+def test_claims_provider_lookup_sample_project_matches_golden_files():
+    sample = parse_powercenter_xml(
+        (SAMPLES_DIR / "m_claims_provider_lookup.xml").read_bytes()
+    )
+    expected = json.loads(
+        (Path(__file__).parent / "golden" / "m_claims_provider_lookup.json").read_text()
+    )
+    files = build_project(sample).files
+    assert set(files) == set(expected) | {"requirements.lock"}
+    assert {
+        path: content for path, content in files.items()
+        if path != "requirements.lock"
+    } == expected
+    assert files["requirements.lock"] == DBT_REQUIREMENTS_LOCK
+
+
+def test_lookup_sql_override_and_unconnected_lookup_are_blocked():
+    sample_path = SAMPLES_DIR / "m_claims_provider_lookup.xml"
+    xml = sample_path.read_bytes()
+    for updated, expected_code in [
+        (
+            xml.replace(
+                b'NAME="Lookup SQL Override" VALUE=""',
+                b'NAME="Lookup SQL Override" VALUE="select * from PROVIDER"',
+            ),
+            "LOOKUP_SQL_OVERRIDE_UNSUPPORTED",
+        ),
+        (
+            xml.replace(
+                b'<TABLEATTRIBUTE NAME="Lookup table name" VALUE="PROVIDER"/>',
+                b'<TABLEATTRIBUTE NAME="Lookup table name" VALUE="PROVIDER"/>'
+                b'<TABLEATTRIBUTE NAME="Lookup Type" VALUE="Unconnected"/>',
+            ),
+            "UNCONNECTED_LOOKUP_UNSUPPORTED",
+        ),
+    ]:
+        project = build_project(parse_powercenter_xml(updated))
+        assert project.files["models/marts/fact_claim_provider.sql"].startswith(
+            "-- BLOCKED MODEL:"
+        )
+        assert expected_code in project.blocked_models[0]["reasons"]
+        assert any(item["code"] == expected_code for item in project.diagnostics)
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected_duplicate"),
+    [
+        ("Use First Value", "Provider First"),
+        ("Use Last Value", "Provider Second"),
+        ("Use Any Value", "Provider First"),
+    ],
+)
+def test_connected_lookup_match_policies_are_deterministic(
+    policy: str,
+    expected_duplicate: str,
+    tmp_path: Path,
+):
+    xml = (SAMPLES_DIR / "m_claims_provider_lookup.xml").read_bytes().replace(
+        b'NAME="Lookup Policy on Multiple Match" VALUE="Use First Value"',
+        f'NAME="Lookup Policy on Multiple Match" VALUE="{policy}"'.encode(),
+    )
+    parsed = parse_powercenter_xml(xml)
+    snowflake = build_project(parsed, dialect="snowflake")
+    assert not snowflake.blocked_models
+    assert "QUALIFY ROW_NUMBER() OVER" in snowflake.files[
+        "models/marts/fact_claim_provider.sql"
+    ]
+
+    workspace = tmp_path / policy.lower().replace(" ", "_")
+    project = prepare_validation_workspace(parsed, workspace)
+    assert "ROW_NUMBER() OVER" in project.files[
+        "models/marts/fact_claim_provider.sql"
+    ]
+    report = execute_validation_workspace(workspace, project)
+    assert report["status"] == "passed", report
+    connection = duckdb.connect(str(workspace / "validation.duckdb"))
+    try:
+        rows = connection.execute(
+            "SELECT claim_id, provider_name, provider_tier "
+            "FROM main.fact_claim_provider ORDER BY claim_id"
+        ).fetchall()
+    finally:
+        connection.close()
+    assert rows == [
+        ("C101", "Alpha Clinic", "A"),
+        ("C102", expected_duplicate, "B" if policy != "Use Last Value" else "C"),
+        ("C103", "Gamma Clinic", "A"),
+        ("C104", "UNKNOWN PROVIDER", "UNASSIGNED"),
+        ("C105", expected_duplicate, "B" if policy != "Use Last Value" else "C"),
+        ("C106", "UNKNOWN PROVIDER", "UNASSIGNED"),
+    ]
+
+
+def test_lookup_report_error_and_unsupported_policies_block_with_diagnostics():
+    xml = (SAMPLES_DIR / "m_claims_provider_lookup.xml").read_bytes()
+    for policy, code in [
+        ("Report Error", "LOOKUP_REPORT_ERROR_POLICY"),
+        ("Use Random Value", "UNSUPPORTED_LOOKUP_POLICY"),
+    ]:
+        updated = xml.replace(
+            b'NAME="Lookup Policy on Multiple Match" VALUE="Use First Value"',
+            f'NAME="Lookup Policy on Multiple Match" VALUE="{policy}"'.encode(),
+        )
+        project = build_project(parse_powercenter_xml(updated))
+        assert code in project.blocked_models[0]["reasons"]
+        assert any(item["code"] == code for item in project.diagnostics)
 
 
 @pytest.mark.parametrize(

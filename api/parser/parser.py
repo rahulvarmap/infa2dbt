@@ -32,6 +32,7 @@ def _field(node, port=False):
             porttype=attrs.get("PORTTYPE", ""),
             expression=attrs.get("EXPRESSION", ""),
             group=attrs.get("GROUP", ""),
+            default_value=attrs.get("DEFAULTVALUE", attrs.get("DEFAULT_VALUE", "")),
         )
     return Field(**values)
 

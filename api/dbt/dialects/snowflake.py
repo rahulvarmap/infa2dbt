@@ -73,6 +73,45 @@ def sql_identifier(identifier: str, *, context: str = "column") -> str:
     return quote_identifier(identifier)
 
 
+def lookup_relation(
+    source_sql: str,
+    columns: list[str],
+    partition_columns: list[str],
+    *,
+    last_value: bool,
+) -> str:
+    """Select one stable row for each connected lookup key."""
+    input_alias = "lookup_candidate"
+    output_alias = "lkp"
+    projections = ", ".join(
+        f"{sql_identifier(input_alias, context='relation')}."
+        f"{sql_identifier(column)}"
+        for column in columns
+    )
+    partitions = ", ".join(
+        f"{sql_identifier(input_alias, context='relation')}."
+        f"{sql_identifier(column)}"
+        for column in partition_columns
+    )
+    direction = "DESC" if last_value else "ASC"
+    ordering = ", ".join(
+        f"{sql_identifier(input_alias, context='relation')}."
+        f"{sql_identifier(column)} {direction}"
+        for column in columns
+    )
+    return (
+        "(\n"
+        f"  select {projections}\n"
+        f"  from {source_sql} as "
+        f"{sql_identifier(input_alias, context='relation')}\n"
+        "  QUALIFY ROW_NUMBER() OVER (\n"
+        f"    PARTITION BY {partitions}\n"
+        f"    ORDER BY {ordering}\n"
+        "  ) = 1\n"
+        f") as {sql_identifier(output_alias, context='relation')}"
+    )
+
+
 def render_literal(literal: Literal) -> str:
     if literal.kind == "null":
         return "NULL"

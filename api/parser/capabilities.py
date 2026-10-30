@@ -46,7 +46,10 @@ CAPABILITY_REGISTRY: dict[str, TransformationCapability] = {
         "PARTIAL_JOINER_LINEAGE",
         "Supported equality join keys and row-retention types are generated in dbt; column-value lineage does not model row-level join effects.",
     ),
-    "lookup": _metadata("Lookup source, conditions, defaults, and match behavior are not interpreted."),
+    "lookup": _partial(
+        "PARTIAL_LOOKUP_LINEAGE",
+        "Connected lookup conditions and default values are generated for the supported equality-match subset; row-selection behavior is not represented in column-value lineage.",
+    ),
     "lookup procedure": _metadata("Lookup source, conditions, defaults, and match behavior are not interpreted."),
     "aggregator": _metadata("Grouping, aggregate functions, and row effects are not interpreted."),
     "router": _metadata("Router group conditions and branch semantics are not interpreted."),

@@ -30,6 +30,21 @@ _CLAIMS_MEMBER_SYNTHETIC_VALUES: dict[str, dict[str, tuple[str | None, ...]]] = 
         "member_name": ("Ada", "Grace", "Katherine", "Alan", "Margaret", None),
     },
 }
+_CLAIMS_PROVIDER_LOOKUP_VALUES: dict[str, dict[str, tuple[str | None, ...]]] = {
+    "claims": {
+        "claim_id": ("C101", "C102", "C103", "C104", "C105", "C106"),
+        "provider_id": ("P001", "P002", "P003", "P404", "P002", None),
+        "claim_amount": ("110", "220", "330", "440", "550", "660"),
+    },
+    "provider": {
+        "provider_id": ("P001", "P002", "P002", "P003", "P005", None),
+        "provider_name": (
+            "Alpha Clinic", "Provider First", "Provider Second",
+            "Gamma Clinic", "Epsilon Clinic", None,
+        ),
+        "provider_tier": ("A", "B", "C", "A", "B", None),
+    },
+}
 
 
 def _birthday(reference: date, years_ago: int = 25) -> date:
@@ -93,6 +108,12 @@ def synthetic_seed_rows(source: Source, reference: date | None = None) -> list[l
     overrides = _CLAIMS_MEMBER_SYNTHETIC_VALUES.get(
         normalize_identifier(source.name), {}
     )
+    overrides = {
+        **overrides,
+        **_CLAIMS_PROVIDER_LOOKUP_VALUES.get(
+            normalize_identifier(source.name), {}
+        ),
+    }
     return [
         [
             overrides.get(normalize_identifier(field.name), ())[row_index]

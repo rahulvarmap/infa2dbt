@@ -147,6 +147,32 @@ def test_all_bundled_samples_compile_run_and_match_golden_values(tmp_path: Path)
                 "stg_member": 6,
             }
             continue
+        if sample_path.name == "m_claims_provider_lookup.xml":
+            row_counts = {
+                model["name"]: model["row_count"] for model in report["models"]
+            }
+            assert row_counts == {
+                "fact_claim_provider": 6,
+                "stg_claims": 6,
+                "stg_provider": 6,
+            }
+            connection = duckdb.connect(str(workspace / "validation.duckdb"))
+            try:
+                rows = connection.execute(
+                    "SELECT claim_id, provider_id, provider_name, provider_tier "
+                    "FROM main.fact_claim_provider ORDER BY claim_id"
+                ).fetchall()
+            finally:
+                connection.close()
+            assert rows == [
+                ("C101", "P001", "Alpha Clinic", "A"),
+                ("C102", "P002", "Provider First", "B"),
+                ("C103", "P003", "Gamma Clinic", "A"),
+                ("C104", "P404", "UNKNOWN PROVIDER", "UNASSIGNED"),
+                ("C105", "P002", "Provider First", "B"),
+                ("C106", None, "UNKNOWN PROVIDER", "UNASSIGNED"),
+            ]
+            continue
         if sample_path.name != "m_member_enrollment.xml":
             continue
         target_path = next(
@@ -166,7 +192,7 @@ def test_all_bundled_samples_compile_run_and_match_golden_values(tmp_path: Path)
         connection = duckdb.connect(str(workspace / "validation.duckdb"))
         try:
             assert connection.execute(
-                f"SELECT COUNT(*) FROM main.stg_member_enrollment AS __in "
+                f"SELECT COUNT(*) FROM main.stg_member_enrollment AS src "
                 f"WHERE {source_filter.group(1)}"
             ).fetchone()[0] == 5
             rows = connection.execute(
@@ -279,8 +305,8 @@ def test_joiner_supports_multiple_equality_conditions_and_blocks_non_equi(
     sql = project.files["models/marts/fact_claim.sql"]
     assert not project.blocked_models
     assert (
-        " on __master.member_id = __detail.member_id AND "
-        "__master.member_name = __detail.claim_id"
+        " on mst.member_id = dtl.member_id AND "
+        "mst.member_name = dtl.claim_id"
     ) in sql
     target_sql = sql.split("\n\n", 1)[1]
     for seed in project.seed_tables:

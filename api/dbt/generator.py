@@ -47,7 +47,9 @@ from .predicates import parse_simple_predicate
 
 DBT_CORE_VERSION = "1.12.6"
 DBT_SNOWFLAKE_VERSION = "1.12.4"
-SUPPORTED_TRANSFORMATIONS = {"source qualifier", "expression", "filter", "joiner"}
+SUPPORTED_TRANSFORMATIONS = {
+    "source qualifier", "expression", "filter", "joiner", "lookup",
+}
 
 
 @dataclass(frozen=True)
@@ -393,7 +395,7 @@ def _build_joiner_relation(
                 f"Join condition input '{connector.from_field}' is not produced upstream.",
                 parts[1],
             )
-        alias = "__master" if group == "master" else "__detail"
+        alias = "mst" if group == "master" else "dtl"
         return (
             f"{dialect.sql_identifier(alias, context='relation')}."
             f"{dialect.sql_identifier(column)}"
@@ -498,7 +500,7 @@ def _build_joiner_relation(
                 port.name,
             )
         output_name = snake_case(port.name)
-        alias = "__master" if group == "master" else "__detail"
+        alias = "mst" if group == "master" else "dtl"
         projections.append(
             f"    {dialect.sql_identifier(alias, context='relation')}."
             f"{dialect.sql_identifier(source_column)} as "
@@ -512,7 +514,7 @@ def _build_joiner_relation(
             dialect.sql_identifier(relation.sql, context="relation")
             if relation.is_cte else relation.sql
         )
-        alias = "__master" if group == "master" else "__detail"
+        alias = "mst" if group == "master" else "dtl"
         return (
             f"{source_sql} as "
             f"{dialect.sql_identifier(alias, context='relation')}"
@@ -528,6 +530,341 @@ def _build_joiner_relation(
         f"    on {' AND '.join(rendered_predicates)}\n)"
     )
     return cte_sql, _Relation(sql=cte_name, columns=columns, is_cte=True)
+
+
+def _build_lookup_relation(
+    transformation: Transformation,
+    instance: Instance,
+    parent_keys: list[str],
+    incoming: dict[tuple[str, str], list],
+    relations: dict[str, _Relation],
+    dialect: SqlDialect,
+) -> tuple[str, _Relation]:
+    def blocked(code: str, message: str, field: str | None = None):
+        raise _GenerationBlocked(_Block(code, message, instance.name, field))
+
+    attributes: dict[str, list[str]] = defaultdict(list)
+    for name, value in transformation.attributes.items():
+        attributes[_attribute_key(name)].append(value.strip())
+
+    for name in ("lookup sql override", "sql override", "sql query"):
+        if any(value for value in attributes.get(name, [])):
+            blocked(
+                "LOOKUP_SQL_OVERRIDE_UNSUPPORTED",
+                f"Lookup '{instance.name}' uses a SQL override, which is outside the supported subset.",
+                "Lookup SQL Override",
+            )
+    if any(value for value in attributes.get("lookup source filter", [])):
+        blocked(
+            "LOOKUP_SOURCE_FILTER_UNSUPPORTED",
+            f"Lookup '{instance.name}' uses a source filter, which is outside the supported subset.",
+            "Lookup Source Filter",
+        )
+    lookup_types = {
+        _attribute_key(value)
+        for value in attributes.get("lookup type", [])
+        if value
+    }
+    if any("unconnected" in value for value in lookup_types):
+        blocked(
+            "UNCONNECTED_LOOKUP_UNSUPPORTED",
+            f"Lookup '{instance.name}' is unconnected, which is outside the supported subset.",
+            "Lookup Type",
+        )
+
+    policies = {
+        _attribute_key(value)
+        for key, values in attributes.items()
+        if key in {
+            "lookup policy on multiple match",
+            "policy on multiple match",
+            "multiple match policy",
+        }
+        for value in values
+        if value
+    }
+    if len(policies) > 1:
+        blocked(
+            "CONFLICTING_LOOKUP_POLICIES",
+            f"Lookup '{instance.name}' declares conflicting multiple-match policies.",
+            "Lookup Policy on Multiple Match",
+        )
+    policy = next(iter(policies), "use any value")
+    if policy == "report error":
+        blocked(
+            "LOOKUP_REPORT_ERROR_POLICY",
+            f"Lookup '{instance.name}' is configured to report an error for multiple matches.",
+            "Lookup Policy on Multiple Match",
+        )
+    if policy not in {"use first value", "use last value", "use any value"}:
+        blocked(
+            "UNSUPPORTED_LOOKUP_POLICY",
+            f"Lookup '{instance.name}' uses unsupported multiple-match policy '{policy}'.",
+            "Lookup Policy on Multiple Match",
+        )
+    last_value = policy == "use last value"
+
+    ports_by_group_name: dict[tuple[str, str], Port] = {}
+    for port in transformation.ports:
+        group = normalize_identifier(port.group.strip())
+        if group not in {"input", "lookup"}:
+            continue
+        key = (group, normalize_identifier(port.name))
+        if key in ports_by_group_name:
+            blocked(
+                "AMBIGUOUS_LOOKUP_PORT",
+                f"Lookup '{instance.name}' has duplicate {group} port '{port.name}'.",
+                port.name,
+            )
+        ports_by_group_name[key] = port
+
+    connectors_by_group_port: dict[tuple[str, str], list] = defaultdict(list)
+    group_parents: dict[str, str] = {}
+    for (to_instance, to_field), connectors in incoming.items():
+        if to_instance != normalize_identifier(instance.name):
+            continue
+        candidates = [
+            (group, name) for group, name in ports_by_group_name
+            if name == to_field
+        ]
+        if len(candidates) != 1:
+            blocked(
+                "UNRESOLVED_LOOKUP_INPUT_GROUP",
+                f"Lookup input '{to_field}' must resolve to one INPUT or LOOKUP port group.",
+                to_field,
+            )
+        group, port_name = candidates[0]
+        if len(connectors) != 1:
+            blocked(
+                "AMBIGUOUS_LOOKUP_INPUT",
+                f"Lookup port '{to_field}' must have exactly one incoming connector.",
+                to_field,
+            )
+        connector = connectors[0]
+        parent_key = normalize_identifier(connector.from_instance)
+        previous = group_parents.setdefault(group, parent_key)
+        if previous != parent_key:
+            blocked(
+                "MULTIPLE_LOOKUP_GROUP_INPUTS",
+                f"Lookup {group} ports must come from one input relation.",
+                to_field,
+            )
+        connectors_by_group_port[(group, port_name)].append(connector)
+
+    if set(group_parents) != {"input", "lookup"}:
+        blocked(
+            "LOOKUP_REQUIRES_INPUT_AND_SOURCE",
+            f"Connected Lookup '{instance.name}' must have one INPUT and one LOOKUP relation.",
+        )
+    if (
+        len(set(group_parents.values())) != 2
+        or set(group_parents.values()) != set(parent_keys)
+    ):
+        blocked(
+            "LOOKUP_REQUIRES_TWO_INPUTS",
+            f"Connected Lookup '{instance.name}' must combine distinct input and lookup relations.",
+        )
+    for group, parent_key in group_parents.items():
+        if parent_key not in relations:
+            blocked(
+                "UNRESOLVED_LOOKUP_INPUT",
+                f"Lookup {group} relation is unresolved.",
+            )
+
+    condition_values = sorted({
+        value for value in attributes.get("lookup condition", []) if value
+    })
+    if len(condition_values) != 1:
+        blocked(
+            "MISSING_LOOKUP_CONDITION",
+            f"Lookup '{instance.name}' must declare exactly one Lookup Condition.",
+            "Lookup Condition",
+        )
+
+    def resolve_condition_port(reference: PortReference) -> tuple[str, str, str]:
+        parts = reference.name.split(".")
+        if len(parts) != 2:
+            blocked(
+                "INVALID_LOOKUP_CONDITION",
+                f"Lookup condition reference '{reference.name}' must use INPUT.field or LOOKUP.field.",
+                "Lookup Condition",
+            )
+        group = normalize_identifier(parts[0])
+        port_name = normalize_identifier(parts[1])
+        if group not in {"input", "lookup"}:
+            blocked(
+                "INVALID_LOOKUP_CONDITION",
+                f"Lookup condition reference '{reference.name}' must use INPUT or LOOKUP.",
+                "Lookup Condition",
+            )
+        if (group, port_name) not in ports_by_group_name:
+            blocked(
+                "UNRESOLVED_LOOKUP_CONDITION_PORT",
+                f"Lookup condition references unknown {group} port '{parts[1]}'.",
+                parts[1],
+            )
+        connectors = connectors_by_group_port.get((group, port_name), [])
+        if len(connectors) != 1:
+            blocked(
+                "UNRESOLVED_LOOKUP_CONDITION_PORT",
+                f"Lookup condition port '{reference.name}' is not connected exactly once.",
+                parts[1],
+            )
+        connector = connectors[0]
+        relation = relations[group_parents[group]]
+        column = relation.columns.get(normalize_identifier(connector.from_field))
+        if column is None:
+            blocked(
+                "UNRESOLVED_LOOKUP_CONDITION_FIELD",
+                f"Lookup condition input '{connector.from_field}' is not produced upstream.",
+                parts[1],
+            )
+        return group, column, connector.from_field
+
+    condition = condition_values[0]
+    try:
+        condition_ast = parse_expression(condition)
+    except ExpressionSyntaxError as error:
+        blocked(
+            "INVALID_LOOKUP_CONDITION",
+            f"Lookup '{instance.name}' has an invalid Lookup Condition: {error}",
+            "Lookup Condition",
+        )
+    predicates = _join_conjuncts(condition_ast)
+    rendered_predicates = []
+    partition_columns = set()
+    for predicate in predicates:
+        if (
+            not isinstance(predicate, BinaryOperator)
+            or predicate.operator != "="
+            or not isinstance(predicate.left, PortReference)
+            or not isinstance(predicate.right, PortReference)
+        ):
+            blocked(
+                "NON_EQUI_LOOKUP_CONDITION",
+                f"Lookup '{instance.name}' supports only equality conditions joined with AND.",
+                "Lookup Condition",
+            )
+        left = resolve_condition_port(predicate.left)
+        right = resolve_condition_port(predicate.right)
+        if left[0] == right[0]:
+            blocked(
+                "NON_EQUI_LOOKUP_CONDITION",
+                f"Lookup '{instance.name}' conditions must compare INPUT and LOOKUP ports.",
+                "Lookup Condition",
+            )
+        input_column = left[1] if left[0] == "input" else right[1]
+        lookup_column = left[1] if left[0] == "lookup" else right[1]
+        input_alias = dialect.sql_identifier("src", context="relation")
+        lookup_alias = dialect.sql_identifier("lkp", context="relation")
+        left_sql = (
+            f"{input_alias}.{dialect.sql_identifier(input_column)}"
+            if left[0] == "input"
+            else f"{lookup_alias}.{dialect.sql_identifier(left[1])}"
+        )
+        right_sql = (
+            f"{input_alias}.{dialect.sql_identifier(right[1])}"
+            if right[0] == "input"
+            else f"{lookup_alias}.{dialect.sql_identifier(lookup_column)}"
+        )
+        rendered_predicates.append(f"{left_sql} = {right_sql}")
+        partition_columns.add(lookup_column)
+
+    input_relation = relations[group_parents["input"]]
+    lookup_relation = relations[group_parents["lookup"]]
+    input_sql = (
+        dialect.sql_identifier(input_relation.sql, context="relation")
+        if input_relation.is_cte else input_relation.sql
+    )
+    lookup_sql = (
+        dialect.sql_identifier(lookup_relation.sql, context="relation")
+        if lookup_relation.is_cte else lookup_relation.sql
+    )
+    lookup_columns = sorted(set(lookup_relation.columns.values()))
+    partition_names = sorted(partition_columns)
+    deduped_lookup_sql = dialect.lookup_relation(
+        lookup_sql,
+        lookup_columns,
+        partition_names,
+        last_value=last_value,
+    )
+
+    output_ports = [
+        port for port in transformation.ports
+        if "OUTPUT" in port.porttype.upper()
+        and "VARIABLE" not in port.porttype.upper()
+    ]
+    if not output_ports:
+        blocked(
+            "NO_LOOKUP_OUTPUTS",
+            f"Lookup '{instance.name}' has no output ports.",
+        )
+    projections = []
+    output_columns: dict[str, str] = {}
+    for port in sorted(output_ports, key=lambda item: normalize_identifier(item.name)):
+        group = normalize_identifier(port.group.strip())
+        port_key = normalize_identifier(port.name)
+        if group not in {"input", "lookup"}:
+            blocked(
+                "UNRESOLVED_LOOKUP_OUTPUT_GROUP",
+                f"Lookup output '{port.name}' must belong to INPUT or LOOKUP.",
+                port.name,
+            )
+        connectors = connectors_by_group_port.get((group, port_key), [])
+        if len(connectors) != 1:
+            blocked(
+                "UNRESOLVED_LOOKUP_OUTPUT",
+                f"Lookup output '{port.name}' must map to exactly one input field.",
+                port.name,
+            )
+        connector = connectors[0]
+        relation = relations[group_parents[group]]
+        source_column = relation.columns.get(normalize_identifier(connector.from_field))
+        if source_column is None:
+            blocked(
+                "UNRESOLVED_LOOKUP_OUTPUT_FIELD",
+                f"Lookup input '{connector.from_field}' is not produced upstream.",
+                port.name,
+            )
+        alias = "src" if group == "input" else "lkp"
+        expression_sql = (
+            f"{dialect.sql_identifier(alias, context='relation')}."
+            f"{dialect.sql_identifier(source_column)}"
+        )
+        if group == "lookup" and port.default_value.strip():
+            try:
+                default_ast = parse_expression(port.default_value)
+            except ExpressionSyntaxError as error:
+                blocked(
+                    "INVALID_LOOKUP_DEFAULT",
+                    f"Lookup default for '{port.name}' is invalid: {error}",
+                    port.name,
+                )
+            if not isinstance(default_ast, Literal):
+                blocked(
+                    "UNSUPPORTED_LOOKUP_DEFAULT",
+                    f"Lookup default for '{port.name}' must be a literal value.",
+                    port.name,
+                )
+            expression_sql = (
+                f"COALESCE({expression_sql}, {dialect.render_literal(default_ast)})"
+            )
+        output_name = snake_case(port.name)
+        output_columns[port_key] = output_name
+        projections.append(
+            f"    {expression_sql} as {dialect.sql_identifier(output_name)}"
+        )
+
+    cte_name = snake_case(instance.name)
+    projection_sql = ",\n".join(projections)
+    cte_sql = (
+        f"{dialect.sql_identifier(cte_name, context='relation')} as (\n"
+        f"  select\n{projection_sql}\n"
+        f"  from {input_sql} as {dialect.sql_identifier('src', context='relation')}\n"
+        f"  LEFT JOIN {deduped_lookup_sql}\n"
+        f"    on {' AND '.join(rendered_predicates)}\n)"
+    )
+    return cte_sql, _Relation(sql=cte_name, columns=output_columns, is_cte=True)
 
 
 class _ProjectBuilder:
@@ -1133,6 +1470,12 @@ class _ProjectBuilder:
                 transformation.type if transformation else
                 instance.transformation_type or instance.type
             )
+            if type_name == "lookup procedure":
+                raise _GenerationBlocked(_Block(
+                    "UNCONNECTED_LOOKUP_UNSUPPORTED",
+                    f"Lookup '{instance.name}' is unconnected, which is outside the supported subset.",
+                    instance.name,
+                ))
             if type_name not in SUPPORTED_TRANSFORMATIONS:
                 raise _GenerationBlocked(_Block(
                     "UNSUPPORTED_TRANSFORMATION",
@@ -1165,6 +1508,18 @@ class _ProjectBuilder:
                 ctes.append(joiner_sql)
                 relations[instance_key] = joiner_relation
                 continue
+            if type_name == "lookup":
+                lookup_sql, lookup_relation = _build_lookup_relation(
+                    transformation,
+                    instance,
+                    parent_keys,
+                    incoming,
+                    relations,
+                    self.dialect,
+                )
+                ctes.append(lookup_sql)
+                relations[instance_key] = lookup_relation
+                continue
             if len(parent_keys) > 1:
                 raise _GenerationBlocked(_Block(
                     "MULTIPLE_INPUT_RELATIONS",
@@ -1191,7 +1546,7 @@ class _ProjectBuilder:
                 for port in transformation.ports
                 if "VARIABLE" in port.porttype.upper()
             }
-            relation_alias = "__in"
+            relation_alias = "src"
             source_filter_sql = ""
             source_filter = self.source_filters.get((mapping_key, instance_key))
             if type_name == "source qualifier" and source_filter is not None:

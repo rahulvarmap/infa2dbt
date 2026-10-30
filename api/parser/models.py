@@ -25,6 +25,7 @@ class Port(Field):
     porttype: str = ""
     expression: str = ""
     group: str = ""
+    default_value: str = ""
 
 
 class Transformation(BaseModel):
