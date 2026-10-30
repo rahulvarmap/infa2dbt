@@ -782,10 +782,20 @@ def _build_lookup_relation(
     )
     lookup_columns = sorted(set(lookup_relation.columns.values()))
     partition_names = sorted(partition_columns)
+    order_names = [
+        column for column in lookup_columns if column not in partition_columns
+    ] + partition_names
+    match_flag_column = "lkp_matched"
+    while normalize_identifier(match_flag_column) in {
+        normalize_identifier(column) for column in lookup_columns
+    }:
+        match_flag_column = f"_{match_flag_column}"
     deduped_lookup_sql = dialect.lookup_relation(
         lookup_sql,
         lookup_columns,
         partition_names,
+        order_names,
+        match_flag_column,
         last_value=last_value,
     )
 
@@ -846,8 +856,14 @@ def _build_lookup_relation(
                     f"Lookup default for '{port.name}' must be a literal value.",
                     port.name,
                 )
+            match_flag = (
+                f"{dialect.sql_identifier('lkp', context='relation')}."
+                f"{dialect.sql_identifier(match_flag_column)}"
+            )
             expression_sql = (
-                f"COALESCE({expression_sql}, {dialect.render_literal(default_ast)})"
+                f"CASE WHEN {match_flag} IS NULL "
+                f"THEN {dialect.render_literal(default_ast)} "
+                f"ELSE {expression_sql} END"
             )
         output_name = snake_case(port.name)
         output_columns[port_key] = output_name

@@ -42,7 +42,7 @@ _CLAIMS_PROVIDER_LOOKUP_VALUES: dict[str, dict[str, tuple[str | None, ...]]] = {
             "Alpha Clinic", "Provider First", "Provider Second",
             "Gamma Clinic", "Epsilon Clinic", None,
         ),
-        "provider_tier": ("A", "B", "C", "A", "B", None),
+        "provider_tier": ("A", "B", "C", None, "B", None),
     },
 }
 

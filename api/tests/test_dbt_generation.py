@@ -362,9 +362,19 @@ def test_connected_lookup_match_policies_are_deterministic(
     parsed = parse_powercenter_xml(xml)
     snowflake = build_project(parsed, dialect="snowflake")
     assert not snowflake.blocked_models
-    assert "QUALIFY ROW_NUMBER() OVER" in snowflake.files[
-        "models/marts/fact_claim_provider.sql"
-    ]
+    target_sql = snowflake.files["models/marts/fact_claim_provider.sql"]
+    assert "QUALIFY ROW_NUMBER() OVER" in target_sql
+    direction = (
+        "DESC NULLS LAST" if policy == "Use Last Value" else "ASC NULLS FIRST"
+    )
+    assert (
+        "ORDER BY "
+        f"lookup_candidate.provider_name {direction}, "
+        f"lookup_candidate.provider_tier {direction}, "
+        f"lookup_candidate.provider_id {direction}"
+    ) in target_sql
+    assert "CASE WHEN lkp.lkp_matched IS NULL THEN 'UNKNOWN PROVIDER'" in target_sql
+    assert "COALESCE(lkp.provider_name" not in target_sql
 
     workspace = tmp_path / policy.lower().replace(" ", "_")
     project = prepare_validation_workspace(parsed, workspace)
@@ -384,7 +394,7 @@ def test_connected_lookup_match_policies_are_deterministic(
     assert rows == [
         ("C101", "Alpha Clinic", "A"),
         ("C102", expected_duplicate, "B" if policy != "Use Last Value" else "C"),
-        ("C103", "Gamma Clinic", "A"),
+        ("C103", "Gamma Clinic", None),
         ("C104", "UNKNOWN PROVIDER", "UNASSIGNED"),
         ("C105", expected_duplicate, "B" if policy != "Use Last Value" else "C"),
         ("C106", "UNKNOWN PROVIDER", "UNASSIGNED"),

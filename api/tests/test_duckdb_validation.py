@@ -167,7 +167,7 @@ def test_all_bundled_samples_compile_run_and_match_golden_values(tmp_path: Path)
             assert rows == [
                 ("C101", "P001", "Alpha Clinic", "A"),
                 ("C102", "P002", "Provider First", "B"),
-                ("C103", "P003", "Gamma Clinic", "A"),
+                ("C103", "P003", "Gamma Clinic", None),
                 ("C104", "P404", "UNKNOWN PROVIDER", "UNASSIGNED"),
                 ("C105", "P002", "Provider First", "B"),
                 ("C106", None, "UNKNOWN PROVIDER", "UNASSIGNED"),

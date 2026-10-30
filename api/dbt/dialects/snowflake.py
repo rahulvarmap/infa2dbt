@@ -77,6 +77,8 @@ def lookup_relation(
     source_sql: str,
     columns: list[str],
     partition_columns: list[str],
+    order_columns: list[str],
+    match_flag_column: str,
     *,
     last_value: bool,
 ) -> str:
@@ -97,11 +99,11 @@ def lookup_relation(
     ordering = ", ".join(
         f"{sql_identifier(input_alias, context='relation')}."
         f"{sql_identifier(column)} {direction}"
-        for column in columns
+        for column in order_columns
     )
     return (
         "(\n"
-        f"  select {projections}\n"
+        f"  select {projections}, 1 as {sql_identifier(match_flag_column)}\n"
         f"  from {source_sql} as "
         f"{sql_identifier(input_alias, context='relation')}\n"
         "  QUALIFY ROW_NUMBER() OVER (\n"

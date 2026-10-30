@@ -63,6 +63,8 @@ def lookup_relation(
     source_sql: str,
     columns: list[str],
     partition_columns: list[str],
+    order_columns: list[str],
+    match_flag_column: str,
     *,
     last_value: bool,
 ) -> str:
@@ -70,15 +72,20 @@ def lookup_relation(
     input_alias = "lookup_candidate"
     ranked_alias = "lookup_ranked"
     output_alias = "lkp"
-    projections = ", ".join(
-        f"{sql_identifier(ranked_alias, context='relation')}."
-        f"{sql_identifier(column)}"
-        for column in columns
-    )
     input_projections = ", ".join(
         f"{sql_identifier(input_alias, context='relation')}."
         f"{sql_identifier(column)}"
         for column in columns
+    )
+    projected_columns = ", ".join(
+        f"{sql_identifier(ranked_alias, context='relation')}."
+        f"{sql_identifier(column)}"
+        for column in columns
+    )
+    output_projections = (
+        f"{projected_columns}, "
+        f"{sql_identifier(ranked_alias, context='relation')}."
+        f"{sql_identifier(match_flag_column)}"
     )
     partitions = ", ".join(
         f"{sql_identifier(input_alias, context='relation')}."
@@ -89,13 +96,14 @@ def lookup_relation(
     ordering = ", ".join(
         f"{sql_identifier(input_alias, context='relation')}."
         f"{sql_identifier(column)} {direction}"
-        for column in columns
+        for column in order_columns
     )
     return (
         "(\n"
-        f"  select {projections}\n"
+        f"  select {output_projections}\n"
         "  from (\n"
-        f"    select {input_projections},\n"
+        f"    select {input_projections}, 1 as "
+        f"{sql_identifier(match_flag_column)},\n"
         "      ROW_NUMBER() OVER (\n"
         f"        PARTITION BY {partitions}\n"
         f"        ORDER BY {ordering}\n"

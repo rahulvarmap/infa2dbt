@@ -36,6 +36,8 @@ class SqlDialect(Protocol):
         source_sql: str,
         columns: list[str],
         partition_columns: list[str],
+        order_columns: list[str],
+        match_flag_column: str,
         *,
         last_value: bool,
     ) -> str: ...
