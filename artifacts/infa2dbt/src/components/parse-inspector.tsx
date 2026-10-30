@@ -3,8 +3,9 @@ import type { ParseResponse } from '@workspace/api-client-react';
 import { LineageView } from '@/components/lineage/lineage-view';
 import { normalizeIdentifier, orderKey, type ParsedSource } from '@/components/lineage/lineage-utils';
 import { DbtProjectFiles, type DbtDialect } from '@/components/dbt-project-files';
+import { ExplainView } from '@/components/explain-view';
 
-type Tab = 'lineage' | 'summary' | 'ports' | 'raw' | 'dbt-sql';
+type Tab = 'explain' | 'lineage' | 'summary' | 'ports' | 'raw' | 'dbt-sql';
 
 export function ParseInspector({
   data,
@@ -20,7 +21,7 @@ export function ParseInspector({
   onDialectChange: (dialect: DbtDialect) => void;
 }) {
   const [mapIdx, setMapIdx] = useState(0);
-  const [tab, setTab] = useState<Tab>('lineage');
+  const [tab, setTab] = useState<Tab>('explain');
   const [tIdx, setTIdx] = useState(0);
   const [rawOpen, setRawOpen] = useState(false);
   const mapping = data.mappings[Math.min(mapIdx, data.mappings.length - 1)];
@@ -45,8 +46,8 @@ export function ParseInspector({
         )}
       </div>
       <div className="tabs" role="tablist" aria-label="Parsed mapping views">
-        {(['lineage', 'summary', 'ports', 'raw', 'dbt-sql'] as Tab[]).map((t) => (
-          <button key={t} role="tab" type="button" aria-selected={tab === t} className="tab" data-active={tab === t} onClick={() => setTab(t)} data-testid={`tab-${t}`}>{t === 'dbt-sql' ? 'dbt SQL' : t}</button>
+        {(['explain', 'lineage', 'summary', 'ports', 'raw', 'dbt-sql'] as Tab[]).map((t) => (
+          <button key={t} role="tab" type="button" aria-selected={tab === t} className="tab" data-active={tab === t} onClick={() => setTab(t)} data-testid={`tab-${t}`}>{t === 'dbt-sql' ? 'dbt SQL' : t === 'explain' ? 'Explain' : t}</button>
         ))}
       </div>
       <section className="mapping-diagnostics" aria-labelledby="mapping-diagnostics-title" data-testid="panel-mapping-diagnostics">
@@ -76,6 +77,14 @@ export function ParseInspector({
       {!mapping && tab !== 'raw' && tab !== 'dbt-sql' ? <p className="drop-caption">No mappings found in this file.</p> : null}
       {mapping && tab === 'lineage' && (
         <div data-testid="panel-lineage"><LineageView data={data} mapping={mapping} source={source} /></div>
+      )}
+      {mapping && tab === 'explain' && (
+        <ExplainView
+          data={data}
+          mapping={mapping}
+          source={source}
+          dialect={dialect}
+        />
       )}
       {mapping && tab === 'summary' && (
         <div data-testid="panel-summary">

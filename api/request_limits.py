@@ -29,6 +29,8 @@ PROCESSING_PATHS = {
     "/api/parse",
     "/lineage/trace",
     "/api/lineage/trace",
+    "/explain",
+    "/api/explain",
 } | VALIDATION_PATHS
 
 

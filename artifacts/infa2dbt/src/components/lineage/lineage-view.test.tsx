@@ -12,6 +12,10 @@ import { ParseInspector } from '../parse-inspector';
 import { LineageView } from './lineage-view';
 import { orderKey, type ParsedSource } from './lineage-utils';
 
+vi.mock('@/components/explain-view', () => ({
+  ExplainView: () => <div data-testid="mock-explain" />,
+}));
+
 // Real parse/trace work now includes isolated Python worker startup.
 configure({ asyncUtilTimeout: 12_000 });
 

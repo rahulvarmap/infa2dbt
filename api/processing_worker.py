@@ -16,6 +16,7 @@ from api.parser.lineage import LineageGraph, mapping_key
 from api.parser.models import Diagnostic, LineageData, ParseResponse, TraceResponse
 from api.request_limits import MAX_MAPPINGS
 from api.dbt import build_project, validate_project, zip_project
+from api.explainer import explain_result
 
 
 class MappingLimitExceeded(ValueError):
@@ -121,6 +122,17 @@ def process_xml_request(
                     "zip_base64": base64.b64encode(archive).decode("ascii"),
                     "blocked_models": project.blocked_models,
                     "diagnostics": project.diagnostics,
+                },
+            }
+
+        if mode == "explain":
+            dialect = fields.get("dialect", "snowflake")
+            project = build_project(result, dialect=dialect)
+            return {
+                "status_code": 200,
+                "content": {
+                    "dialect": dialect,
+                    "explanations": explain_result(result, project),
                 },
             }
 

@@ -76,6 +76,41 @@ function projectFor(dialect: DbtDialect) {
   };
 }
 
+function explanationFor() {
+  return {
+    explanations: {
+      m_member_enrollment: {
+        mapping: 'm_member_enrollment',
+        overview: 'Builds DIM_MEMBER from MEMBER_ENROLLMENT, keeping active members.',
+        steps: [{
+          instance: 'FIL_ACTIVE_MEMBERS',
+          type: 'Filter',
+          description: "Keeps rows where status code equals A and enrollment end date is at least today's date.",
+        }],
+        columns: [{
+          target_column: 'FULL_NAME',
+          source_columns: ['MEMBER_ENROLLMENT.FIRST_NAME', 'MEMBER_ENROLLMENT.LAST_NAME'],
+          expression: "FIRST_NAME || ' ' || LAST_NAME",
+          rule: 'Joined from First name, a space, and Last name.',
+        }],
+        migration_status: { supported: 1, warning: 1, blocked: 0 },
+        generated_models: [{
+          name: 'dim_member',
+          path: 'models/marts/dim_member.sql',
+          status: 'generated',
+        }],
+        diagnostics: [{
+          severity: 'warning',
+          code: 'PARTIAL_EXPRESSION_LINEAGE',
+          message: 'Some expression behavior is not represented in column lineage.',
+          instance: 'EXP_MEMBER_DERIVE',
+          field: null,
+        }],
+      },
+    },
+  };
+}
+
 function TestInspector() {
   const [dialect, setDialect] = useState<DbtDialect>('snowflake');
   return (
@@ -98,10 +133,10 @@ afterEach(() => {
 describe('dbt SQL inspector tab', () => {
   it('lists generated models, highlights SQL, shows blocked diagnostics, and copies a file', async () => {
     const payload = projectFor('snowflake');
-    const fetchMock = vi.fn().mockResolvedValue({
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve({
       ok: true,
-      json: async () => payload,
-    });
+      json: async () => (url === '/api/explain' ? explanationFor() : payload),
+    }));
     vi.stubGlobal('fetch', fetchMock);
     const previousClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -134,7 +169,9 @@ describe('dbt SQL inspector tab', () => {
         name: 'Copy models/marts/dim_member.sql',
       }));
       await waitFor(() => expect(writeText).toHaveBeenCalledWith(payload.files['models/marts/dim_member.sql']));
-      const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url, options] = fetchMock.mock.calls.find(
+        ([requestedUrl]) => requestedUrl === '/api/dbt/project/files',
+      ) as [string, RequestInit];
       expect(url).toBe('/api/dbt/project/files');
       expect((options.body as FormData).get('sample_name')).toBe('m_member_enrollment.xml');
       expect((options.body as FormData).get('dialect')).toBe('snowflake');
@@ -151,6 +188,7 @@ describe('dbt SQL inspector tab', () => {
     const snowflake = projectFor('snowflake');
     const duckdb = projectFor('duckdb');
     const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => explanationFor() })
       .mockResolvedValueOnce({ ok: true, json: async () => snowflake })
       .mockResolvedValueOnce({ ok: true, json: async () => duckdb });
     vi.stubGlobal('fetch', fetchMock);
@@ -160,10 +198,38 @@ describe('dbt SQL inspector tab', () => {
     await screen.findByTestId('dbt-code-viewer');
     fireEvent.click(screen.getByTestId('dbt-dialect-duckdb'));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     await waitFor(() => expect(screen.getByTestId('dbt-code-viewer').textContent).toContain('duckdb'));
     expect(screen.getByTestId('dbt-dialect-duckdb').getAttribute('aria-pressed')).toBe('true');
-    const [, secondOptions] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const [, secondOptions] = fetchMock.mock.calls[2] as [string, RequestInit];
     expect((secondOptions.body as FormData).get('dialect')).toBe('duckdb');
+  });
+});
+
+describe('Explain inspector tab', () => {
+  it('is first and shows the deterministic overview, derivations, models, and diagnostic links', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => explanationFor(),
+    }));
+
+    render(<TestInspector />);
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs[0].textContent).toBe('Explain');
+    expect(tabs[0].getAttribute('aria-selected')).toBe('true');
+    expect(await screen.findByTestId('explain-overview')).toHaveProperty(
+      'textContent',
+      'Builds DIM_MEMBER from MEMBER_ENROLLMENT, keeping active members.',
+    );
+    expect(screen.getByTestId('explain-steps').textContent).toContain('FIL_ACTIVE_MEMBERS');
+    expect(screen.getByTestId('explain-columns').textContent).toContain(
+      'MEMBER_ENROLLMENT.FIRST_NAME, MEMBER_ENROLLMENT.LAST_NAME',
+    );
+    expect(screen.getByTestId('explain-models').textContent).toContain(
+      'models/marts/dim_member.sql',
+    );
+    expect(screen.getByTestId('explain-warning-link').getAttribute('href'))
+      .toBe('#explain-diagnostics');
+    expect(screen.getByText('PARTIAL_EXPRESSION_LINEAGE')).toBeTruthy();
   });
 });

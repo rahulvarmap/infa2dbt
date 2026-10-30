@@ -299,6 +299,22 @@ async def preview_dbt_project_files(request: Request) -> JSONResponse:
     )
 
 
+@app.post("/explain")
+@app.post("/api/explain")
+async def explain_mapping(request: Request) -> JSONResponse:
+    project_input = await read_dbt_project_input(request)
+    if isinstance(project_input, JSONResponse):
+        return project_input
+    contents, fields = project_input
+    return await process_in_worker(
+        contents,
+        {
+            "mode": "explain",
+            "dialect": fields.get("dialect", "snowflake"),
+        },
+    )
+
+
 @app.post("/dbt/validate")
 @app.post("/api/dbt/validate")
 async def validate_dbt_project(request: Request) -> JSONResponse:
