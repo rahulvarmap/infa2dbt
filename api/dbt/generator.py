@@ -41,7 +41,7 @@ from api.parser.models import (
 )
 from api.parser.order import topological_order
 
-from .dependency_lock import DBT_REQUIREMENTS_LOCK
+from .dependency_lock import DBT_REQUIREMENTS_LOCK, DBT_SECURITY_OVERRIDES
 from .dialects import get_dialect
 from .dialects.base import SqlDialect, UnsupportedDialectFunction, UnsupportedDialectType
 from .predicates import parse_simple_predicate
@@ -1513,13 +1513,16 @@ class _ProjectBuilder:
                 f"dbt-snowflake=={DBT_SNOWFLAKE_VERSION}\n"
             )
             self.files["requirements.lock"] = DBT_REQUIREMENTS_LOCK
+            self.files["security-overrides.txt"] = DBT_SECURITY_OVERRIDES
             self.files["README.md"] = (
                 "# Generated Snowflake dbt project\n\n"
                 "Generated models use views by default. Review `diagnostics.json` before running "
                 "the project; blocked models are intentionally non-functional placeholders.\n\n"
                 "Copy `profiles.yml` to your local dbt profiles directory and replace every "
                 "placeholder with your own Snowflake connection values. Do not commit credentials.\n\n"
-                "Install the fully pinned environment with `python -m pip install -r requirements.lock`. "
+                "Install the fully pinned environment with `uv pip install --system "
+                "--overrides security-overrides.txt -r requirements.lock`. "
+                "The override uses security-fixed filelock despite the connector's stale upper bound. "
                 "`requirements.txt` lists the direct dbt dependencies. "
                 "Run `dbt parse` from this project directory.\n"
             )

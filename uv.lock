@@ -6,6 +6,9 @@ resolution-markers = [
     "python_full_version < '3.12'",
 ]
 
+[manifest]
+overrides = [{ name = "filelock", specifier = "==4.2.4" }]
+
 [[package]]
 name = "agate"
 version = "1.9.1"
@@ -99,11 +102,11 @@ wheels = [
 
 [[package]]
 name = "certifi"
-version = "2025.1.31"
+version = "2026.10.23"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/1c/ab/c9f1e32b7b1bf505bf26f0ef697775960db7932abeb7b516de930ba2705f/certifi-2025.1.31.tar.gz", hash = "sha256:3d5da6925056f6f18f119200434a4780a94263f10d1c21d032a6f6b2baa20651", size = 167577, upload-time = "2025-01-31T02:16:47.166Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fd/11/b524cbd9bbdaca58608e4cf4053fd463417549e1959fa8d3aa18319f9555/certifi-2026.10.23.tar.gz", hash = "sha256:a9895e6e2758b371e0545e321a3a8fd1fcfd9829ada8824a936dfb16aaaf36cd", size = 136225, upload-time = "2026-10-23T11:36:16.478Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/38/fc/bce832fd4fd99766c04d1ee0eead6b0ec6486fb100ae5e74c1d91292b982/certifi-2025.1.31-py3-none-any.whl", hash = "sha256:ca78db4565a652026a4db2bcdf68f2fb589ea80d0be70e03929ed730746b84fe", size = 166393, upload-time = "2025-01-31T02:16:45.015Z" },
+    { url = "https://files.pythonhosted.org/packages/32/d1/a3652fe2c19134d0d15922177821d863cbd7e842d53a21bbe7e8e3a1b5ac/certifi-2026.10.23-py3-none-any.whl", hash = "sha256:e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1", size = 135082, upload-time = "2026-10-23T11:36:14.763Z" },
 ]
 
 [[package]]
@@ -585,7 +588,7 @@ wheels = [
 
 [[package]]
 name = "dbt-snowflake"
-version = "1.12.3"
+version = "1.12.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "agate" },
@@ -596,9 +599,9 @@ dependencies = [
     { name = "pyopenssl" },
     { name = "snowflake-connector-python", extra = ["secure-local-storage"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f6/33/d88be399549a0504150de9dfa18eebdbe2049095211476dc81f9ea6347ea/dbt_snowflake-1.12.3.tar.gz", hash = "sha256:f13a4e7a43bf7279805a9c4280c4ae0573b91e7d3ec1fd031a5c51cb7430df4a", size = 208024, upload-time = "2026-10-14T06:24:55.674Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/90/0a/2ca52d0082e5740eb16875733333a4d902eb72cd71b5e78a652270e67eee/dbt_snowflake-1.12.4.tar.gz", hash = "sha256:83efb205b84ed0f9ddc9e6a78f5aa7205f1ffb4b23dfbf36d55dacf31478ff9e", size = 208228, upload-time = "2026-10-22T08:35:10.441Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ba/a4/dbd5dd04aa51a87e0a5524b72b58ebdccf5af8a5e0311cbb17dbdf1a6014/dbt_snowflake-1.12.3-py3-none-any.whl", hash = "sha256:865fcdf102b28c0b144096e94b307035556b20484671f719488607acf284f97d", size = 101446, upload-time = "2026-10-14T06:24:53.874Z" },
+    { url = "https://files.pythonhosted.org/packages/26/ac/a36c354e893e2a13da612ce94909121f83001aef4daf9bd36637be5b8651/dbt_snowflake-1.12.4-py3-none-any.whl", hash = "sha256:2413e6c3959efab6a4871c3edb0d7ad1788e0610bec9d5f426b811e15686342b", size = 101447, upload-time = "2026-10-22T08:35:08.805Z" },
 ]
 
 [[package]]
@@ -651,11 +654,11 @@ wheels = [
 
 [[package]]
 name = "filelock"
-version = "3.32.7"
+version = "4.2.4"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/0f/59/e19834834cb01a32febfbb0f8a23a9088088f5d45991824ff2bc3b5e8acb/filelock-3.32.7.tar.gz", hash = "sha256:37b8a3d9811b0f9aef7e5ec5c71bb320de52df51e6ca9bcd6f5ad81187660da7", size = 225154, upload-time = "2026-09-16T00:24:20.907Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d8/28/3893324bcadf8f89b1616637468d766af3f625008c0735bf704fdfa86617/filelock-4.2.4.tar.gz", hash = "sha256:c6d8663535e1650ee430507b4ffbac7b464dd64b7647ea0112a9f406499d163d", size = 652444, upload-time = "2026-10-19T01:57:51.001Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/15/df/31098c5aeb4d966b553641472bd55fcf5fdfac953549894b8a765ba44e91/filelock-3.32.7-py3-none-any.whl", hash = "sha256:65ff0d0190ea42038b32bda4b77834fb05be2cad4c5b9b01aa4dfb3614536e52", size = 100157, upload-time = "2026-09-16T00:24:19.543Z" },
+    { url = "https://files.pythonhosted.org/packages/e0/1b/5e74289a1878e666bb4b65fe5805a04cafcac2aa5f519ef1ead67ef91c56/filelock-4.2.4-py3-none-any.whl", hash = "sha256:301241438c57936ef93f4243a94f2559022268bfcf9b375a9a72eb0f8db8358e", size = 162475, upload-time = "2026-10-19T01:57:49.419Z" },
 ]
 
 [[package]]
@@ -1606,7 +1609,7 @@ dependencies = [
 requires-dist = [
     { name = "dbt-core", specifier = "==1.12.6" },
     { name = "dbt-duckdb", specifier = "==1.11.0" },
-    { name = "dbt-snowflake", specifier = "==1.12.3" },
+    { name = "dbt-snowflake", specifier = "==1.12.4" },
     { name = "duckdb", specifier = "==1.5.5" },
 ]
 

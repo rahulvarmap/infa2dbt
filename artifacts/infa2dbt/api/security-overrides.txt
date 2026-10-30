@@ -1,0 +1,4 @@
+# Snowflake connector 4.8.0 declares filelock<4, but every 3.x release is
+# affected by GHSA-69hj-f68j-2879. Keep its existing FileLock API on the
+# security-fixed release until the connector relaxes its upper bound.
+filelock==4.2.4

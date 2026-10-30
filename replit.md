@@ -9,6 +9,9 @@ only. No application database or authentication is used.
 - Python 3.11 dependencies: `artifacts/infa2dbt/api/requirements.txt` is the single
   pinned runtime/test dependency source, including NetworkX and transitive packages.
 - `bash scripts/install-infa2dbt-python-deps.sh` installs those pins into `.pythonlibs`.
+- The installer uses uv and `security-overrides.txt` to override the Snowflake
+  connector's stale `filelock<4` cap with the security-fixed release. The root uv
+  configuration and exported dbt projects carry the same exception.
 - `PORT=8080 bash scripts/run-infa2dbt-api.sh` starts FastAPI.
 - `PORT=24518 BASE_PATH=/ pnpm --filter @workspace/infa2dbt run dev` starts Vite.
 - `python -m pytest api/tests -q` runs backend/parser/lineage tests.

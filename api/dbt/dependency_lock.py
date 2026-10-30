@@ -23,7 +23,7 @@ dbt-extractor==0.6.0
 dbt-protos==1.0.615
 dbt-snowflake==1.12.4
 deepdiff==8.6.2
-filelock==3.32.7
+filelock==4.2.4
 idna==3.20
 importlib-metadata==10.1.0
 isodate==0.7.2
@@ -80,4 +80,9 @@ typing-extensions==4.16.0
 typing-inspection==0.4.4
 urllib3==2.8.0
 zipp==4.1.2
+"""
+
+# See artifacts/infa2dbt/api/security-overrides.txt and tool.uv in pyproject.toml.
+DBT_SECURITY_OVERRIDES = """# Connector 4.8.0 caps filelock<4; use the security-fixed FileLock API.
+filelock==4.2.4
 """

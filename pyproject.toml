@@ -9,7 +9,7 @@ requires-python = ">=3.11"
 dependencies = [
     "dbt-core==1.12.6",
     "dbt-duckdb==1.11.0",
-    "dbt-snowflake==1.12.3",
+    "dbt-snowflake==1.12.4",
     "duckdb==1.5.5",
 ]
 
@@ -19,3 +19,8 @@ repl-nix-workspace = "repl_nix_workspace:main"
 [build-system]
 requires = ["uv_build>=0.13.4,<0.14.0"]
 build-backend = "uv_build"
+
+[tool.uv]
+# Connector 4.8 still caps filelock below the security-fixed major version.
+# Keep this exception aligned with the runtime/export security overrides.
+override-dependencies = ["filelock==4.2.4"]
