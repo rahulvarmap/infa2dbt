@@ -237,6 +237,19 @@ def render_function(function: FunctionCall, arguments: list[str]) -> str:
     )
 
 
+def render_aggregate(name: str, arguments: list[str]) -> str:
+    aggregate = name.upper()
+    if aggregate not in {"SUM", "COUNT", "AVG", "MIN", "MAX", "ANY_VALUE"}:
+        raise UnsupportedSnowflakeFunction(
+            f"Aggregate '{name}' has no Snowflake translation."
+        )
+    if len(arguments) != 1:
+        raise UnsupportedSnowflakeFunction(
+            f"Aggregate {aggregate} requires exactly one argument."
+        )
+    return f"{aggregate}({arguments[0]})"
+
+
 def _render_null_ignoring_concat(arguments: list[str]) -> str:
     all_null = " AND ".join(f"({argument}) IS NULL" for argument in arguments)
     joined = " || ".join(

@@ -328,6 +328,19 @@ def render_function(function: FunctionCall, arguments: list[str]) -> str:
     )
 
 
+def render_aggregate(name: str, arguments: list[str]) -> str:
+    aggregate = name.upper()
+    if aggregate not in {"SUM", "COUNT", "AVG", "MIN", "MAX", "ANY_VALUE"}:
+        raise UnsupportedDuckDBFunction(
+            f"Aggregate '{name}' has no DuckDB translation."
+        )
+    if len(arguments) != 1:
+        raise UnsupportedDuckDBFunction(
+            f"Aggregate {aggregate} requires exactly one argument."
+        )
+    return f"{aggregate}({arguments[0]})"
+
+
 def render_predicate(
     expression: Expression,
     resolve_column: Callable[[PortReference], str],

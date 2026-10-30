@@ -24,7 +24,9 @@ from api.parser.expressions import (
     UnaryOperator,
     VariablePortReference,
     iter_port_references,
+    iter_function_calls,
     parse_expression,
+    unknown_function_calls,
 )
 from api.parser.identifiers import normalize_identifier, normalize_type_name
 from api.parser.models import (
@@ -49,7 +51,9 @@ DBT_CORE_VERSION = "1.12.6"
 DBT_SNOWFLAKE_VERSION = "1.12.4"
 SUPPORTED_TRANSFORMATIONS = {
     "source qualifier", "expression", "filter", "joiner", "lookup",
+    "aggregator",
 }
+AGGREGATE_FUNCTIONS = frozenset({"sum", "count", "avg", "min", "max"})
 
 
 @dataclass(frozen=True)
@@ -881,6 +885,184 @@ def _build_lookup_relation(
         f"    on {' AND '.join(rendered_predicates)}\n)"
     )
     return cte_sql, _Relation(sql=cte_name, columns=output_columns, is_cte=True)
+
+
+def _build_aggregator_relation(
+    transformation: Transformation,
+    instance: Instance,
+    parent_relation: _Relation,
+    dialect: SqlDialect,
+    resolve_port: Callable[[PortReference], str],
+) -> tuple[str, _Relation, list[tuple[str, str, str, str | None]]]:
+    output_ports = [
+        port for port in transformation.ports
+        if "OUTPUT" in port.porttype.upper()
+        and "VARIABLE" not in port.porttype.upper()
+    ]
+    if not output_ports:
+        raise _GenerationBlocked(_Block(
+            "NO_AGGREGATOR_OUTPUTS",
+            f"Aggregator '{instance.name}' has no output ports.",
+            instance.name,
+        ))
+
+    projections = []
+    group_by_expressions = []
+    columns: dict[str, str] = {}
+    diagnostics: list[tuple[str, str, str, str | None]] = []
+
+    for port in sorted(output_ports, key=lambda item: normalize_identifier(item.name)):
+        try:
+            expression = (
+                parse_expression(port.expression)
+                if port.expression.strip()
+                else PortReference(port.name)
+            )
+        except ExpressionSyntaxError as error:
+            raise _GenerationBlocked(_Block(
+                "INVALID_AGGREGATE_EXPRESSION",
+                str(error),
+                instance.name,
+                port.name,
+            )) from error
+
+        unsupported = next(unknown_function_calls(expression), None)
+        if unsupported is not None:
+            raise _GenerationBlocked(_Block(
+                "UNSUPPORTED_AGGREGATE_FUNCTION",
+                f"Function '{unsupported.name}' in Aggregator '{instance.name}' is outside the supported subset.",
+                instance.name,
+                port.name,
+            ))
+
+        function_calls = list(iter_function_calls(expression))
+        aggregate_calls = [
+            call for call in function_calls
+            if normalize_identifier(call.name) in AGGREGATE_FUNCTIONS
+        ]
+        is_aggregate = (
+            isinstance(expression, FunctionCall)
+            and normalize_identifier(expression.name) in AGGREGATE_FUNCTIONS
+        )
+
+        try:
+            if port.group_by:
+                if aggregate_calls:
+                    raise _GenerationBlocked(_Block(
+                        "AGGREGATE_GROUP_BY_PORT",
+                        f"Group-by port '{port.name}' in Aggregator '{instance.name}' cannot contain an aggregate.",
+                        instance.name,
+                        port.name,
+                    ))
+                expression_sql = _render_expression(expression, resolve_port, dialect)
+                group_by_expressions.append(expression_sql)
+            elif is_aggregate:
+                if len(aggregate_calls) != 1:
+                    raise _GenerationBlocked(_Block(
+                        "NESTED_AGGREGATE_UNSUPPORTED",
+                        f"Nested aggregate expressions are not supported on '{port.name}'.",
+                        instance.name,
+                        port.name,
+                    ))
+                aggregate_name = normalize_identifier(expression.name)
+                valid_argument_counts = {1, 2} if aggregate_name == "sum" else {1}
+                if len(expression.arguments) not in valid_argument_counts:
+                    expected_arguments = (
+                        "one or two" if aggregate_name == "sum" else "one"
+                    )
+                    raise _GenerationBlocked(_Block(
+                        "UNSUPPORTED_AGGREGATE_ARITY",
+                        (
+                            f"Aggregator function '{expression.name}' on '{port.name}' "
+                            f"requires {expected_arguments} argument(s) in this subset."
+                        ),
+                        instance.name,
+                        port.name,
+                    ))
+                value_sql = _render_expression(
+                    expression.arguments[0], resolve_port, dialect
+                )
+                if aggregate_name == "sum" and len(expression.arguments) == 2:
+                    condition_sql = _render_expression(
+                        expression.arguments[1], resolve_port, dialect
+                    )
+                    value_sql = f"CASE WHEN {condition_sql} THEN {value_sql} END"
+                expression_sql = dialect.render_aggregate(
+                    expression.name, [value_sql]
+                )
+            else:
+                if aggregate_calls:
+                    raise _GenerationBlocked(_Block(
+                        "NESTED_AGGREGATE_UNSUPPORTED",
+                        f"Aggregate calls must be the outer function on Aggregator output '{port.name}'.",
+                        instance.name,
+                        port.name,
+                    ))
+                value_sql = _render_expression(expression, resolve_port, dialect)
+                expression_sql = dialect.render_aggregate("ANY_VALUE", [value_sql])
+                diagnostics.append((
+                    "warning",
+                    "AGGREGATOR_ANY_VALUE_SEMANTICS",
+                    (
+                        f"PowerCenter returns the last row's value for non-aggregated "
+                        f"output port '{port.name}', but SQL ANY_VALUE does not preserve "
+                        "last-row ordering and may select any value."
+                    ),
+                    port.name,
+                ))
+        except _GenerationBlocked:
+            raise
+        except UnsupportedDialectFunction as error:
+            raise _GenerationBlocked(_Block(
+                "UNSUPPORTED_AGGREGATE_FUNCTION",
+                str(error),
+                instance.name,
+                port.name,
+            )) from error
+
+        output_name = snake_case(port.name)
+        columns[normalize_identifier(port.name)] = output_name
+        projections.append(
+            f"    {expression_sql} as {dialect.sql_identifier(output_name)}"
+        )
+
+    sorted_input = any(
+        _attribute_key(name) == "sorted input"
+        and normalize_identifier(value) in {"yes", "true", "1"}
+        for name, value in transformation.attributes.items()
+    )
+    if sorted_input:
+        diagnostics.append((
+            "info",
+            "AGGREGATOR_SORTED_INPUT_IGNORED",
+            f"Sorted Input is ignored for Aggregator '{instance.name}'.",
+            None,
+        ))
+
+    source_sql = (
+        dialect.sql_identifier(parent_relation.sql, context="relation")
+        if parent_relation.is_cte else parent_relation.sql
+    )
+    cte_name = snake_case(instance.name)
+    group_by_clause = (
+        "\n  group by " + ", ".join(group_by_expressions)
+        if group_by_expressions else ""
+    )
+    cte_sql = (
+        f"{dialect.sql_identifier(cte_name, context='relation')} as (\n"
+        "  select\n"
+        + ",\n".join(projections)
+        + "\n  from "
+        + source_sql
+        + f" as {dialect.sql_identifier('src', context='relation')}"
+        + group_by_clause
+        + "\n)"
+    )
+    return (
+        cte_sql,
+        _Relation(sql=cte_name, columns=columns, is_cte=True),
+        diagnostics,
+    )
 
 
 class _ProjectBuilder:
@@ -1719,6 +1901,29 @@ class _ProjectBuilder:
                     instance.name,
                     reference.name,
                 ))
+
+            if type_name == "aggregator":
+                aggregator_sql, aggregator_relation, diagnostics = (
+                    _build_aggregator_relation(
+                        transformation,
+                        instance,
+                        parent_relation,
+                        self.dialect,
+                        resolve_port,
+                    )
+                )
+                for severity, code, message, field_name in diagnostics:
+                    self._add_diagnostic(
+                        code,
+                        message,
+                        mapping=mapping_key,
+                        instance=instance.name,
+                        field_name=field_name,
+                        severity=severity,
+                    )
+                ctes.append(aggregator_sql)
+                relations[instance_key] = aggregator_relation
+                continue
 
             output_ports = [
                 port for port in transformation.ports

@@ -13,6 +13,7 @@ from .identifiers import normalize_identifier
 KNOWN_FUNCTIONS = frozenset({
     "iif", "decode", "isnull", "nvl", "ltrim", "rtrim", "substr",
     "concat", "to_date", "to_char", "sysdate", "date_diff", "trunc",
+    "sum", "count", "avg", "min", "max",
 })
 
 

@@ -51,7 +51,10 @@ CAPABILITY_REGISTRY: dict[str, TransformationCapability] = {
         "Connected lookup conditions and default values are generated for the supported equality-match subset; row-selection behavior is not represented in column-value lineage.",
     ),
     "lookup procedure": _metadata("Lookup source, conditions, defaults, and match behavior are not interpreted."),
-    "aggregator": _metadata("Grouping, aggregate functions, and row effects are not interpreted."),
+    "aggregator": _partial(
+        "PARTIAL_AGGREGATOR_LINEAGE",
+        "Supported aggregate expressions are generated in dbt; grouping and row-reduction effects are not represented in column-value lineage.",
+    ),
     "router": _metadata("Router group conditions and branch semantics are not interpreted."),
     "union": _metadata("Union input alignment and duplicate semantics are not interpreted."),
     "sorter": _metadata("Sort order and distinctness semantics are not interpreted."),

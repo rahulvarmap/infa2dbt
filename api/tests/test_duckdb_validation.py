@@ -173,6 +173,31 @@ def test_all_bundled_samples_compile_run_and_match_golden_values(tmp_path: Path)
                 ("C106", None, "UNKNOWN PROVIDER", "UNASSIGNED"),
             ]
             continue
+        if sample_path.name == "m_claims_member_summary.xml":
+            row_counts = {
+                model["name"]: model["row_count"] for model in report["models"]
+            }
+            assert row_counts == {
+                "member_claim_summary": 4,
+                "stg_claims": 6,
+            }
+            connection = duckdb.connect(str(workspace / "validation.duckdb"))
+            try:
+                rows = connection.execute(
+                    "SELECT member_id, total_amount, claim_count, avg_amount, "
+                    "min_amount, max_amount, paid_amount "
+                    "FROM main.member_claim_summary "
+                    "ORDER BY member_id NULLS LAST"
+                ).fetchall()
+            finally:
+                connection.close()
+            assert rows == [
+                ("M001", 10, 2, 10.0, 10, 10, 10),
+                ("M002", 60, 2, 30.0, 20, 40, 40),
+                ("M003", 50, 0, 50.0, 50, 50, 50),
+                (None, None, 1, None, None, None, None),
+            ]
+            continue
         if sample_path.name != "m_member_enrollment.xml":
             continue
         target_path = next(
@@ -207,6 +232,38 @@ def test_all_bundled_samples_compile_run_and_match_golden_values(tmp_path: Path)
             ("SYN-003", 25.0, " NullFirst", "Male"),
             ("SYN-004", 25.0, " ", "Unknown"),
         ]
+
+
+def test_aggregator_without_groups_returns_one_null_safe_empty_row(
+    tmp_path: Path,
+) -> None:
+    sample_xml = Path("samples/m_claims_member_summary.xml").read_bytes()
+    sample_xml = sample_xml.replace(b'GROUPBY="YES"', b'GROUPBY="NO"')
+    parsed = parse_powercenter_xml(sample_xml)
+    workspace = tmp_path / "aggregator-empty"
+    project = prepare_validation_workspace(parsed, workspace)
+    target_sql = project.files["models/marts/member_claim_summary.sql"]
+    assert "group by" not in target_sql.lower()
+    assert "ANY_VALUE(src.member_id)" in target_sql
+
+    connection = duckdb.connect(str(workspace / "validation.duckdb"))
+    try:
+        connection.execute("DELETE FROM main.seed_stg_claims")
+    finally:
+        connection.close()
+
+    report = execute_validation_workspace(workspace, project)
+    assert report["status"] == "passed", report
+    connection = duckdb.connect(str(workspace / "validation.duckdb"))
+    try:
+        rows = connection.execute(
+            "SELECT member_id, total_amount, claim_count, avg_amount, "
+            "min_amount, max_amount, paid_amount, last_status "
+            "FROM main.member_claim_summary"
+        ).fetchall()
+    finally:
+        connection.close()
+    assert rows == [(None, None, 0, None, None, None, None, None)]
 
 
 @pytest.mark.parametrize(

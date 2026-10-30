@@ -33,6 +33,8 @@ def _field(node, port=False):
             expression=attrs.get("EXPRESSION", ""),
             group=attrs.get("GROUP", ""),
             default_value=attrs.get("DEFAULTVALUE", attrs.get("DEFAULT_VALUE", "")),
+            group_by=attrs.get("GROUPBY", attrs.get("GROUP_BY", "")).upper()
+            in {"YES", "TRUE", "1"},
         )
     return Field(**values)
 

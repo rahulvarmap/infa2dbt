@@ -29,6 +29,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SAMPLES_DIR = REPO_ROOT / "samples"
 GOLDEN = Path(__file__).parent / "golden" / "m_member_enrollment.json"
 CLAIMS_GOLDEN = Path(__file__).parent / "golden" / "m_claims_member_join.json"
+AGGREGATOR_GOLDEN = (
+    Path(__file__).parent / "golden" / "m_claims_member_summary.json"
+)
 
 SUPPORTED_XML = b"""<POWERMART><REPOSITORY NAME="R"><FOLDER NAME="F">
   <SOURCE NAME="S">
@@ -312,6 +315,67 @@ def test_claims_provider_lookup_sample_project_matches_golden_files():
         if path != "requirements.lock"
     } == expected
     assert files["requirements.lock"] == DBT_REQUIREMENTS_LOCK
+
+
+def test_claims_member_summary_sample_project_matches_golden_files():
+    sample = parse_powercenter_xml(
+        (SAMPLES_DIR / "m_claims_member_summary.xml").read_bytes()
+    )
+    expected = json.loads(AGGREGATOR_GOLDEN.read_text())
+    project = build_project(sample)
+    assert set(project.files) == set(expected) | {"requirements.lock"}
+    assert {
+        path: content for path, content in project.files.items()
+        if path != "requirements.lock"
+    } == expected
+    assert project.files["requirements.lock"] == DBT_REQUIREMENTS_LOCK
+    target_sql = project.files["models/marts/member_claim_summary.sql"]
+    assert (
+        "SUM(CASE WHEN (src.claim_status = 'PAID') THEN src.claim_amount END)"
+        in target_sql
+    )
+    assert "group by src.member_id" in target_sql
+    assert "ANY_VALUE(src.claim_status)" in target_sql
+    assert any(
+        item["code"] == "AGGREGATOR_ANY_VALUE_SEMANTICS"
+        and item["severity"] == "warning"
+        for item in project.diagnostics
+    )
+    assert any(
+        item["code"] == "AGGREGATOR_SORTED_INPUT_IGNORED"
+        and item["severity"] == "info"
+        for item in project.diagnostics
+    )
+
+
+@pytest.mark.parametrize(
+    ("expression", "diagnostic_code"),
+    [
+        ("SUM(AVG(CLAIM_AMOUNT))", "NESTED_AGGREGATE_UNSUPPORTED"),
+        (
+            "SUM(UNSUPPORTED_FUNC(CLAIM_AMOUNT))",
+            "UNSUPPORTED_AGGREGATE_FUNCTION",
+        ),
+    ],
+)
+def test_aggregator_unsupported_expressions_block_with_diagnostics(
+    expression: str,
+    diagnostic_code: str,
+):
+    xml = (SAMPLES_DIR / "m_claims_member_summary.xml").read_bytes().replace(
+        b"SUM(CLAIM_AMOUNT)",
+        expression.encode(),
+        1,
+    )
+    project = build_project(parse_powercenter_xml(xml))
+    assert project.files["models/marts/member_claim_summary.sql"].startswith(
+        "-- BLOCKED MODEL:"
+    )
+    assert diagnostic_code in project.blocked_models[0]["reasons"]
+    assert any(
+        item["code"] == diagnostic_code and item["severity"] == "error"
+        for item in project.diagnostics
+    )
 
 
 def test_lookup_sql_override_and_unconnected_lookup_are_blocked():

@@ -26,6 +26,7 @@ class Port(Field):
     expression: str = ""
     group: str = ""
     default_value: str = ""
+    group_by: bool = False
 
 
 class Transformation(BaseModel):

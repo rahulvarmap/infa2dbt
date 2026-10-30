@@ -30,6 +30,14 @@ _CLAIMS_MEMBER_SYNTHETIC_VALUES: dict[str, dict[str, tuple[str | None, ...]]] = 
         "member_name": ("Ada", "Grace", "Katherine", "Alan", "Margaret", None),
     },
 }
+_CLAIMS_AGGREGATOR_SYNTHETIC_VALUES: dict[str, dict[str, tuple[str | None, ...]]] = {
+    "claims": {
+        "member_id": ("M001", "M001", "M002", "M002", "M003", None),
+        "claim_id": ("C001", "C002", "C003", "C004", None, "C006"),
+        "claim_amount": ("10", None, "40", "20", "50", None),
+        "claim_status": ("PAID", "PAID", "PAID", "PENDING", "PAID", "PENDING"),
+    },
+}
 _CLAIMS_PROVIDER_LOOKUP_VALUES: dict[str, dict[str, tuple[str | None, ...]]] = {
     "claims": {
         "claim_id": ("C101", "C102", "C103", "C104", "C105", "C106"),
@@ -107,6 +115,10 @@ def synthetic_seed_rows(source: Source, reference: date | None = None) -> list[l
     reference = reference or datetime.now(timezone.utc).date()
     if normalize_identifier(source.folder) == "provider_demo":
         overrides = _CLAIMS_PROVIDER_LOOKUP_VALUES.get(
+            normalize_identifier(source.name), {}
+        )
+    elif normalize_identifier(source.folder) == "aggregator_demo":
+        overrides = _CLAIMS_AGGREGATOR_SYNTHETIC_VALUES.get(
             normalize_identifier(source.name), {}
         )
     else:
